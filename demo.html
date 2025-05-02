@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <title>Sue 组件 Demo (带指令)</title>
+    <!-- 样式将由 core.js 动态注入 -->
+</head>
+<body>
+
+    <!-- 组件将挂载到这里 -->
+    <div id="app">
+        <p>正在加载组件...</p>
+    </div>
+
+    <!-- 1. 引入 Acorn 解析器 -->
+    <!-- 从 CDN 或本地下载 -->
+    <!-- <script src="https://unpkg.com/acorn/dist/acorn.js"></script> -->
+    <!-- 或者下载 acorn.js 文件放到同目录下: <script src="acorn.js"></script> -->
+    <script src="acorn.js"></script>
+
+    <!-- 2. 引入核心库 -->
+    <script src="core.js"></script>
+
+    <!-- 3. 引入指令处理器 -->
+    <script src="directives.js"></script>
+
+    <!-- 4. 启动应用 -->
+    <script>
+        document.addEventListener('DOMContentLoaded', () => {
+            if (window.SueCore && typeof window.SueCore.mountComponent === 'function') {
+                // 调用核心库的挂载函数
+                window.SueCore.mountComponent('demo.sue', '#app');
+            } else {
+                console.error("SueCore.js 或其依赖未能正确加载！");
+                document.getElementById('app').innerHTML = '<p style="color:red;">核心库加载失败！请检查控制台错误。</p>';
+            }
+        });
+    </script>
+
+</body>
+</html>

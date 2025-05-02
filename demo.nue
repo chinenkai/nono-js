@@ -1,0 +1,150 @@
+<template>
+    <h2>Sue 组件 Demo (带指令)</h2>
+
+    <!-- 基本计数器 -->
+    <div class="container">
+        <h3>计数器</h3>
+        <p>
+            当前计数值: <strong>{{ count() }}</strong>
+        </p>
+        <button @click="count(count() + 1)">加 1</button>
+        <button @click="add2ToCount()">加 2 (方法)</button>
+    </div>
+
+    <!-- sue-if 示例 -->
+    <div class="container">
+        <h3>sue-if 指令</h3>
+        <button @click="showDetails(!showDetails())">
+            {{ showDetails() ? '隐藏' : '显示' }} 详情
+        </button>
+        <div sue-if="showDetails()">
+            <p>这是一段只有在 `showDetails()` 为真时才显示的详细信息。</p>
+            <p>当前计数值也是可见的: {{ count() }}</p>
+        </div>
+        <p sue-if="!showDetails()">详情已隐藏。</p>
+    </div>
+
+    <!-- sue-for 示例 -->
+    <div class="container">
+        <h3>sue-for 指令</h3>
+        <p>项目列表:</p>
+        <ul>
+            <!-- 模板元素，会被 sue-for 克隆 -->
+            <li sue-for="(item, index) in items()">
+                索引 {{ index }}: {{ item.name }} (ID: {{ item.id }})
+                <span sue-if="item.id === count()"> &lt;-- ID 与计数值相同!</span>
+            </li>
+        </ul>
+        <button @click="addItem()">添加项目</button>
+        <button @click="removeItem()">移除最后一项</button>
+        <button @click="shuffleItems()">打乱顺序</button>
+    </div>
+
+    <!-- sue-html 示例 -->
+    <div class="container">
+        <h3>sue-html 指令</h3>
+        <p>下面的内容由 `message()` 提供，并作为 HTML 解析:</p>
+        <div sue-html="message()"></div>
+        <button @click="changeMessage()">改变消息 (含 HTML)</button>
+    </div>
+
+</template>
+
+<script>
+    // --- 响应式状态 ---
+    const count = createSignal(0);
+    const showDetails = createSignal(false);
+    const items = createSignal([
+        { id: 1, name: '苹果' },
+        { id: 2, name: '香蕉' }
+    ]);
+    const message = createSignal('这是 <strong>默认</strong> 消息.');
+
+    // --- 方法 ---
+    const add2ToCount = function() {
+        console.log("demo.sue: 执行 add2ToCount");
+        count(count() + 2);
+    };
+
+    const addItem = function() {
+        const currentItems = items(); // 读取当前数组
+        const newItemId = currentItems.length > 0 ? Math.max(...currentItems.map(i => i.id)) + 1 : 1;
+        // 创建一个新数组并写入 Signal
+        items([...currentItems, { id: newItemId, name: `新水果 ${newItemId}` }]);
+    };
+
+    const removeItem = function() {
+        const currentItems = items();
+        if (currentItems.length > 0) {
+            items(currentItems.slice(0, -1)); // 移除最后一项
+        }
+    };
+
+    const shuffleItems = function() {
+        const currentItems = [...items()]; // 创建副本
+        for (let i = currentItems.length - 1; i > 0; i--) {
+            const j = Math.floor(Math.random() * (i + 1));
+            [currentItems[i], currentItems[j]] = [currentItems[j], currentItems[i]]; // 交换
+        }
+        items(currentItems); // 写入打乱后的数组
+    };
+
+    const changeMessage = function() {
+        const randomNum = Math.random().toFixed(2);
+        message(`<i>更新于 ${new Date().toLocaleTimeString()}</i>: 随机数 <b>${randomNum}</b>`);
+    };
+
+    // **新增：显式返回需要暴露给模板的作用域对象**
+    // 列出所有模板中需要用到的变量和函数
+    return {
+        count: count,
+        showDetails: showDetails,
+        items: items,
+        message: message,
+        add2ToCount: add2ToCount,
+        addItem: addItem,
+        removeItem: removeItem,
+        shuffleItems: shuffleItems,
+        changeMessage: changeMessage
+    };
+</script>
+
+
+<style>
+body {
+    font-family: sans-serif;
+    padding: 20px;
+    font-size: 1.1em;
+    line-height: 1.6;
+}
+.container {
+    border: 1px solid #ccc;
+    padding: 15px;
+    margin-bottom: 20px;
+    border-radius: 5px;
+}
+h2, h3 {
+    margin-top: 0;
+}
+button {
+    padding: 8px 12px;
+    margin-right: 8px;
+    margin-top: 5px;
+    cursor: pointer;
+}
+ul {
+    padding-left: 20px;
+}
+li {
+    margin-bottom: 5px;
+}
+strong {
+    color: #d9534f; /* 红色 */
+}
+/* sue-html 示例的样式 */
+.container div[sue-html] {
+    border: 1px dashed blue;
+    padding: 10px;
+    margin-top: 10px;
+}
+</style>
