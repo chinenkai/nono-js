@@ -2,14 +2,14 @@
 
 (function() {
     // 确认核心库已加载
-    if (!window.SueCore) {
+    if (!window.NueCore) {
         console.error("核心库 (core.js) 必须先加载！");
         return;
     }
     console.log("directives.js 加载中..."); // 保留此日志用于确认加载
 
     // 从核心库获取所需函数
-    const { createEffect, compileNode } = window.SueCore;
+    const { createEffect, compileNode } = window.NueCore;
 
     /**
      * 安全地执行表达式，利用 new Function 和内部的 'with' 来处理作用域链。
@@ -38,17 +38,17 @@
     }
 
     /**
-     * 处理 sue-if 指令。
-     * @param {Element} node - 带有 sue-if 属性的元素。
-     * @param {string} expression - sue-if 的表达式。
+     * 处理 if 指令。
+     * @param {Element} node - 带有 if 属性的元素。
+     * @param {string} expression - if 的表达式。
      * @param {object} scope - 组件作用域。
      * @param {Function} compileFn - 核心编译函数 (compileNode)，用于递归编译。
      * @param {object} directiveHandlers - 指令处理器集合。
      */
-    function handleSueIf(node, expression, scope, compileFn, directiveHandlers) {
+    function handleNueIf(node, expression, scope, compileFn, directiveHandlers) {
         const parent = node.parentNode;
-        // 使用注释节点作为锚点，标记 sue-if 的位置
-        const anchor = document.createComment(`sue-if: ${expression}`);
+        // 使用注释节点作为锚点，标记 if 的位置
+        const anchor = document.createComment(`if: ${expression}`);
         parent?.replaceChild(anchor, node); // 替换原始节点
 
         let currentElement = null; // 存储当前条件为真时插入的元素
@@ -59,7 +59,7 @@
                 // 使用新的 evaluateExpression 计算条件，并强制转为布尔值
                 condition = !!evaluateExpression(expression, scope);
             } catch (error) {
-                console.error(`计算 sue-if 表达式 "${expression}" 出错:`, error);
+                console.error(`计算 if 表达式 "${expression}" 出错:`, error);
                 condition = false; // 出错时视为 false
             }
 
@@ -68,8 +68,8 @@
                 if (!currentElement) {
                     // 克隆原始节点（包含其内容和属性）
                     const clone = node.cloneNode(true);
-                    // 移除 sue-if 属性，防止在编译克隆节点时再次处理
-                    clone.removeAttribute('sue-if');
+                    // 移除 if 属性，防止在编译克隆节点时再次处理
+                    clone.removeAttribute('if');
                     // 编译克隆出来的节点及其子节点
                     compileFn(clone, scope, directiveHandlers);
                     // 将编译后的克隆节点插入到锚点之后
@@ -88,23 +88,23 @@
     }
 
     /**
-     * 处理 sue-for 指令。
-     * @param {Element} node - 带有 sue-for 属性的元素 (作为模板)。
-     * @param {string} expression - sue-for 表达式，如 "item in items" 或 "(item, index) in items"。
+     * 处理 for 指令。
+     * @param {Element} node - 带有 for 属性的元素 (作为模板)。
+     * @param {string} expression - for 表达式，如 "item in items" 或 "(item, index) in items"。
      * @param {object} scope - 组件作用域。
      * @param {Function} compileFn - 核心编译函数 (compileNode)。
      * @param {object} directiveHandlers - 指令处理器集合。
      */
-    function handleSueFor(node, expression, scope, compileFn, directiveHandlers) {
+    function handleNueFor(node, expression, scope, compileFn, directiveHandlers) {
         const parent = node.parentNode;
         // 使用注释节点作为锚点
-        const anchor = document.createComment(`sue-for: ${expression}`);
+        const anchor = document.createComment(`for: ${expression}`);
         parent?.replaceChild(anchor, node); // 替换模板节点
 
-        // 解析 sue-for 表达式获取别名和迭代对象表达式
+        // 解析 for 表达式获取别名和迭代对象表达式
         const match = expression.match(/^\s*(\(?\s*([a-zA-Z0-9_]+)\s*(?:,\s*([a-zA-Z0-9_]+)\s*)?\)?)\s+in\s+(.+)$/);
         if (!match) {
-            console.error(`无效的 sue-for 表达式: "${expression}"`);
+            console.error(`无效的 for 表达式: "${expression}"`);
             return;
         }
         const alias = match[2]; // item 别名
@@ -121,7 +121,7 @@
                 // 确保结果是可迭代的数组
                 items = Array.isArray(result) ? result : (result ? Array.from(result) : []);
             } catch (error) {
-                console.error(`计算 sue-for 可迭代对象 "${iterableExpression}" 出错:`, error);
+                console.error(`计算 for 可迭代对象 "${iterableExpression}" 出错:`, error);
                 items = [];
             }
 
@@ -142,8 +142,8 @@
 
                 // 克隆模板节点
                 const clone = node.cloneNode(true);
-                // 移除 sue-for 属性，防止无限递归
-                clone.removeAttribute('sue-for');
+                // 移除 for 属性，防止无限递归
+                clone.removeAttribute('for');
 
                 // 使用子作用域编译克隆的节点
                 compileFn(clone, childScope, directiveHandlers);
@@ -157,14 +157,14 @@
     }
 
     /**
-     * 处理 sue-html 指令。
-     * @param {Element} node - 带有 sue-html 属性的元素。
-     * @param {string} expression - sue-html 的表达式。
+     * 处理 html 指令。
+     * @param {Element} node - 带有 html 属性的元素。
+     * @param {string} expression - html 的表达式。
      * @param {object} scope - 组件作用域。
      */
-    function handleSueHtml(node, expression, scope) {
-        // 移除 sue-html 属性，因为它只在编译时需要
-        node.removeAttribute('sue-html');
+    function handleNueHtml(node, expression, scope) {
+        // 移除 html 属性，因为它只在编译时需要
+        node.removeAttribute('html');
 
         createEffect(() => {
             let htmlContent = '';
@@ -172,22 +172,22 @@
                 // 使用 evaluateExpression 计算 HTML 字符串
                 htmlContent = String(evaluateExpression(expression, scope) || '');
             } catch (error) {
-                console.error(`计算 sue-html 表达式 "${expression}" 出错:`, error);
+                console.error(`计算 html 表达式 "${expression}" 出错:`, error);
                 // 在页面上显示错误信息，而不是让页面崩溃
-                htmlContent = `<span style="color:red;">Error evaluating sue-html: ${error.message}</span>`;
+                htmlContent = `<span style="color:red;">Error evaluating html: ${error.message}</span>`;
             }
             // 警告：直接设置 innerHTML 可能有 XSS 风险，确保内容可信！
             node.innerHTML = htmlContent;
         });
     }
 
-    // 将所有指令处理器挂载到全局 SueDirectives 对象上，供 core.js 调用
-    window.SueDirectives = {
-        handleSueIf,
-        handleSueFor,
-        handleSueHtml
+    // 将所有指令处理器挂载到全局 NueDirectives 对象上，供 core.js 调用
+    window.NueDirectives = {
+        handleNueIf,
+        handleNueFor,
+        handleNueHtml
         // 未来可以添加更多指令处理器
     };
 
-    console.log("directives.js 加载完成，SueDirectives 对象已准备就绪。"); // 保留此日志
+    console.log("directives.js 加载完成，NueDirectives 对象已准备就绪。"); // 保留此日志
 })();

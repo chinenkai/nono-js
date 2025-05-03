@@ -2,7 +2,7 @@
 <html lang="zh-CN">
 <head>
     <meta charset="UTF-8">
-    <title>Sue 组件 Demo (带指令)</title>
+    <title>Nue 组件 Demo (带指令)</title>
     <!-- 样式将由 core.js 动态注入 -->
 </head>
 <body>
@@ -19,19 +19,19 @@
     <script src="acorn.js"></script>
 
     <!-- 2. 引入核心库 -->
-    <script src="core.js"></script>
+    <script src="nono-core.js"></script>
 
     <!-- 3. 引入指令处理器 -->
-    <script src="directives.js"></script>
+    <script src="nono-directives.js"></script>
 
     <!-- 4. 启动应用 -->
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            if (window.SueCore && typeof window.SueCore.mountComponent === 'function') {
+            if (window.NueCore && typeof window.NueCore.mountComponent === 'function') {
                 // 调用核心库的挂载函数
-                window.SueCore.mountComponent('demo.sue', '#app');
+                window.NueCore.mountComponent('demo.nue', '#app');
             } else {
-                console.error("SueCore.js 或其依赖未能正确加载！");
+                console.error("NueCore.js 或其依赖未能正确加载！");
                 document.getElementById('app').innerHTML = '<p style="color:red;">核心库加载失败！请检查控制台错误。</p>';
             }
         });

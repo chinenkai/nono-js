@@ -44,8 +44,8 @@ const componentCache = new Map(); // 缓存已加载和解析的组件数据
 // ==================================
 
 /**
- * 解析 .sue 文件内容，提取 template, script, style
- * @param {string} text .sue 文件文本内容
+ * 解析 .nue 文件内容，提取 template, script, style
+ * @param {string} text .nue 文件文本内容
  * @returns {{template: string, script: string, style: string}}
  */
 function parseComponentStructure(text) {
@@ -154,24 +154,24 @@ function executeScript(scriptContent, ast) {
  */
 function compileNode(node, scope, directiveHandlers) {
     if (node.nodeType === Node.ELEMENT_NODE) {
-        // 优先处理结构性指令 sue-if, sue-for
-        const ifAttr = node.getAttribute('sue-if');
-        const forAttr = node.getAttribute('sue-for');
+        // 优先处理结构性指令 if, for
+        const ifAttr = node.getAttribute('if');
+        const forAttr = node.getAttribute('for');
 
         if (ifAttr !== null) {
-            directiveHandlers.handleSueIf(node, ifAttr, scope, compileNode, directiveHandlers);
+            directiveHandlers.handleNueIf(node, ifAttr, scope, compileNode, directiveHandlers);
             return;
         }
         if (forAttr !== null) {
-            directiveHandlers.handleSueFor(node, forAttr, scope, compileNode, directiveHandlers);
+            directiveHandlers.handleNueFor(node, forAttr, scope, compileNode, directiveHandlers);
             return;
         }
 
-        // 处理其他属性指令，如 sue-html
-        const htmlAttr = node.getAttribute('sue-html');
+        // 处理其他属性指令，如 html
+        const htmlAttr = node.getAttribute('html');
         if (htmlAttr !== null) {
             // 调用指令处理器，它内部会处理表达式执行
-            directiveHandlers.handleSueHtml(node, htmlAttr, scope);
+            directiveHandlers.handleNueHtml(node, htmlAttr, scope);
         }
 
 
@@ -262,7 +262,7 @@ function compileNode(node, scope, directiveHandlers) {
  */
 function injectStyles(css, componentUrl) {
     if (!css || !css.trim()) return;
-    const styleId = `sue-style-${componentUrl.replace(/[^a-zA-Z0-9]/g, '-')}`; // 基于 URL 生成 ID
+    const styleId = `nue-style-${componentUrl.replace(/[^a-zA-Z0-9]/g, '-')}`; // 基于 URL 生成 ID
     if (document.getElementById(styleId)) {
         console.log(`样式 ${styleId} 已存在，跳过注入。`);
         return; // 防止重复注入
@@ -277,7 +277,7 @@ function injectStyles(css, componentUrl) {
 
 /**
  * 加载、编译并挂载组件到目标元素
- * @param {string} componentUrl .sue 文件的 URL
+ * @param {string} componentUrl .nue 文件的 URL
  * @param {string} targetSelector CSS 选择器，指定挂载的目标元素
  */
 async function mountComponent(componentUrl, targetSelector) {
@@ -289,7 +289,7 @@ async function mountComponent(componentUrl, targetSelector) {
     }
 
     // 检查指令处理器是否已加载
-    if (typeof window.SueDirectives === 'undefined') {
+    if (typeof window.NueDirectives === 'undefined') {
          console.error("指令处理器 (directives.js) 未加载！");
          targetElement.innerHTML = `<p style="color: red;">错误：directives.js 未加载</p>`;
          return;
@@ -339,7 +339,7 @@ async function mountComponent(componentUrl, targetSelector) {
             fragment.appendChild(tempDiv.firstChild);
         }
         // 对 fragment 的顶级节点进行编译
-        Array.from(fragment.childNodes).forEach(node => compileNode(node, componentScope, window.SueDirectives));
+        Array.from(fragment.childNodes).forEach(node => compileNode(node, componentScope, window.NueDirectives));
         console.log("模板编译完成.");
 
 
@@ -358,12 +358,12 @@ async function mountComponent(componentUrl, targetSelector) {
 }
 
 // 暴露核心 API
-window.SueCore = {
+window.NueCore = {
     mountComponent,
     createSignal, // 暴露给 directives.js 或外部使用
     createEffect,  // 暴露给 directives.js 或外部使用
     compileNode    // 暴露给 directives.js 用于递归编译
 };
 
-console.log("core.js 加载完成，SueCore 对象已准备就绪。");
+console.log("core.js 加载完成，NueCore 对象已准备就绪。");
 

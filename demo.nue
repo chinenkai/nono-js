@@ -1,5 +1,5 @@
 <template>
-    <h2>Sue 组件 Demo (带指令)</h2>
+    <h2>Nue 组件 Demo (带指令)</h2>
 
     <!-- 基本计数器 -->
     <div class="container">
@@ -11,28 +11,28 @@
         <button @click="add2ToCount()">加 2 (方法)</button>
     </div>
 
-    <!-- sue-if 示例 -->
+    <!-- if 示例 -->
     <div class="container">
-        <h3>sue-if 指令</h3>
+        <h3>if 指令</h3>
         <button @click="showDetails(!showDetails())">
             {{ showDetails() ? '隐藏' : '显示' }} 详情
         </button>
-        <div sue-if="showDetails()">
+        <div if="showDetails()">
             <p>这是一段只有在 `showDetails()` 为真时才显示的详细信息。</p>
             <p>当前计数值也是可见的: {{ count() }}</p>
         </div>
-        <p sue-if="!showDetails()">详情已隐藏。</p>
+        <p if="!showDetails()">详情已隐藏。</p>
     </div>
 
-    <!-- sue-for 示例 -->
+    <!-- for 示例 -->
     <div class="container">
-        <h3>sue-for 指令</h3>
+        <h3>for 指令</h3>
         <p>项目列表:</p>
         <ul>
-            <!-- 模板元素，会被 sue-for 克隆 -->
-            <li sue-for="(item, index) in items()">
+            <!-- 模板元素，会被 for 克隆 -->
+            <li for="(item, index) in items()">
                 索引 {{ index }}: {{ item.name }} (ID: {{ item.id }})
-                <span sue-if="item.id === count()"> &lt;-- ID 与计数值相同!</span>
+                <span if="item.id === count()"> &lt;-- ID 与计数值相同!</span>
             </li>
         </ul>
         <button @click="addItem()">添加项目</button>
@@ -40,11 +40,11 @@
         <button @click="shuffleItems()">打乱顺序</button>
     </div>
 
-    <!-- sue-html 示例 -->
+    <!-- html 示例 -->
     <div class="container">
-        <h3>sue-html 指令</h3>
+        <h3>html 指令</h3>
         <p>下面的内容由 `message()` 提供，并作为 HTML 解析:</p>
-        <div sue-html="message()"></div>
+        <div html="message()"></div>
         <button @click="changeMessage()">改变消息 (含 HTML)</button>
     </div>
 
@@ -62,7 +62,7 @@
 
     // --- 方法 ---
     const add2ToCount = function() {
-        console.log("demo.sue: 执行 add2ToCount");
+        console.log("demo.nue: 执行 add2ToCount");
         count(count() + 2);
     };
 
@@ -141,8 +141,8 @@ li {
 strong {
     color: #d9534f; /* 红色 */
 }
-/* sue-html 示例的样式 */
-.container div[sue-html] {
+/* html 示例的样式 */
+.container div[html] {
     border: 1px dashed blue;
     padding: 10px;
     margin-top: 10px;
