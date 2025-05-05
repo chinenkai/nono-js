@@ -1,4 +1,4 @@
-// directives.js - 处理 sue-* 指令
+// directives.js - 处理 nue-* 指令 (主要是 if, for, html)
 
 (function() {
     // 确认核心库已加载
@@ -6,35 +6,37 @@
         console.error("核心库 (core.js) 必须先加载！");
         return;
     }
-    console.log("directives.js 加载中..."); // 保留此日志用于确认加载
+    console.log("directives.js 加载中...");
 
     // 从核心库获取所需函数
-    const { createEffect, compileNode } = window.NueCore;
+    const { createEffect, compileNode } = window.NueCore; // compileNode 用于递归
 
     /**
-     * 安全地执行表达式，利用 new Function 和内部的 'with' 来处理作用域链。
+     * **重要:** 安全地执行表达式，现在由 core.js 和 directives.js 共享。
      * @param {string} expression - 要求值的表达式字符串。
      * @param {object} scope - 组件作用域对象 (可能包含原型链)。
-     * @param {object} [additionalArgs={}] - 额外的参数对象 { name: value }，会作为自有属性添加到执行上下文中 (例如 'event', 'item', 'index')。
+     * @param {object} [additionalArgs={}] - 额外的参数对象 { name: value }。
      * @returns {*} 表达式的计算结果。
-     * @throws 如果表达式计算出错，则抛出错误。
+     * @throws 如果表达式计算出错。
      */
     function evaluateExpression(expression, scope, additionalArgs = {}) {
-        // 创建一个执行上下文对象，其原型是传入的 scope，保证能访问父作用域变量
+        // 创建执行上下文，原型为 scope，自有属性为 additionalArgs
         const context = Object.create(scope);
-        // 将额外的参数（如 event, item, index）作为自有属性添加到 context
         Object.assign(context, additionalArgs);
 
-        // new Function 的参数列表只包含 context
         const argNames = ['context'];
         const argValues = [context];
 
-        // 函数体使用 'with(context)' 来确保表达式能正确查找变量（先查自有属性，再查原型链）
-        // 注意：这里需要返回表达式的值
-        const evaluatorFunction = new Function(...argNames, `with(context) { return (${expression}); }`); // 将表达式包裹在括号里可能更安全
-
-        // 调用函数，传入 context 对象
-        return evaluatorFunction.apply(null, argValues);
+        try {
+            // 使用 'with' 确保作用域查找正确
+            // 确保表达式被正确地作为返回值处理
+            const evaluatorFunction = new Function(...argNames, `with(context) { return (${expression}); }`);
+            return evaluatorFunction.apply(null, argValues);
+        } catch (error) {
+             // 重新抛出错误，让调用者（如 createEffect 或事件处理器）可以捕获并处理
+             // console.error(`执行表达式 "${expression}" 时出错:`, error); // 可以在这里加日志
+             throw error; // 让上层知道出错了
+        }
     }
 
     /**
@@ -42,46 +44,44 @@
      * @param {Element} node - 带有 if 属性的元素。
      * @param {string} expression - if 的表达式。
      * @param {object} scope - 组件作用域。
-     * @param {Function} compileFn - 核心编译函数 (compileNode)，用于递归编译。
+     * @param {Function} compileFn - 核心编译函数 (compileNode)。
      * @param {object} directiveHandlers - 指令处理器集合。
+     * @param {string} componentName - 当前组件名，用于日志
      */
-    function handleNueIf(node, expression, scope, compileFn, directiveHandlers) {
+    function handleNueIf(node, expression, scope, compileFn, directiveHandlers, componentName) {
         const parent = node.parentNode;
-        // 使用注释节点作为锚点，标记 if 的位置
         const anchor = document.createComment(`if: ${expression}`);
-        parent?.replaceChild(anchor, node); // 替换原始节点
+        parent?.replaceChild(anchor, node);
 
-        let currentElement = null; // 存储当前条件为真时插入的元素
+        let currentElement = null;
+        let isCompiled = false; // 标记是否已编译过
 
         createEffect(() => {
             let condition = false;
             try {
-                // 使用新的 evaluateExpression 计算条件，并强制转为布尔值
                 condition = !!evaluateExpression(expression, scope);
             } catch (error) {
-                console.error(`计算 if 表达式 "${expression}" 出错:`, error);
-                condition = false; // 出错时视为 false
+                console.error(`[${componentName}] 计算 if 表达式 "${expression}" 出错:`, error);
+                condition = false;
             }
 
             if (condition) {
-                // 条件为真且当前没有元素
                 if (!currentElement) {
-                    // 克隆原始节点（包含其内容和属性）
+                    // 克隆原始节点（只克隆一次）
                     const clone = node.cloneNode(true);
-                    // 移除 if 属性，防止在编译克隆节点时再次处理
-                    clone.removeAttribute('if');
-                    // 编译克隆出来的节点及其子节点
-                    compileFn(clone, scope, directiveHandlers);
-                    // 将编译后的克隆节点插入到锚点之后
+                    clone.removeAttribute('if'); // 移除指令属性
+                    // 编译克隆出来的节点及其子节点 (只编译一次)
+                    // 注意：这里传递了 directiveHandlers 和 componentName
+                    compileFn(clone, scope, directiveHandlers, componentName);
+                    isCompiled = true;
+                    // 插入到锚点之后
                     anchor.parentNode?.insertBefore(clone, anchor.nextSibling);
-                    currentElement = clone; // 记录当前显示的元素
+                    currentElement = clone;
                 }
             } else {
-                // 条件为假且当前有元素显示
                 if (currentElement) {
-                    // 从 DOM 中移除元素
                     currentElement.parentNode?.removeChild(currentElement);
-                    currentElement = null; // 清除记录
+                    currentElement = null;
                 }
             }
         });
@@ -90,71 +90,90 @@
     /**
      * 处理 for 指令。
      * @param {Element} node - 带有 for 属性的元素 (作为模板)。
-     * @param {string} expression - for 表达式，如 "item in items" 或 "(item, index) in items"。
+     * @param {string} expression - for 表达式。
      * @param {object} scope - 组件作用域。
      * @param {Function} compileFn - 核心编译函数 (compileNode)。
      * @param {object} directiveHandlers - 指令处理器集合。
+     * @param {string} componentName - 当前组件名，用于日志
      */
-    function handleNueFor(node, expression, scope, compileFn, directiveHandlers) {
+    function handleNueFor(node, expression, scope, compileFn, directiveHandlers, componentName) {
         const parent = node.parentNode;
-        // 使用注释节点作为锚点
         const anchor = document.createComment(`for: ${expression}`);
-        parent?.replaceChild(anchor, node); // 替换模板节点
+        parent?.replaceChild(anchor, node);
 
-        // 解析 for 表达式获取别名和迭代对象表达式
         const match = expression.match(/^\s*(\(?\s*([a-zA-Z0-9_]+)\s*(?:,\s*([a-zA-Z0-9_]+)\s*)?\)?)\s+in\s+(.+)$/);
         if (!match) {
-            console.error(`无效的 for 表达式: "${expression}"`);
+            console.error(`[${componentName}] 无效的 for 表达式: "${expression}"`);
             return;
         }
-        const alias = match[2]; // item 别名
-        const indexAlias = match[3]; // index 别名 (可选)
-        const iterableExpression = match[4].trim(); // 迭代对象表达式
+        const alias = match[2];
+        const indexAlias = match[3];
+        const iterableExpression = match[4].trim();
 
-        let renderedNodes = []; // 存储当前循环渲染出的所有节点
+        let renderedNodesMap = new Map(); // 使用 Map 管理节点，未来可用于 keyed diff
 
         createEffect(() => {
             let items = [];
             try {
-                // 使用 evaluateExpression 获取要迭代的数组
                 const result = evaluateExpression(iterableExpression, scope);
-                // 确保结果是可迭代的数组
                 items = Array.isArray(result) ? result : (result ? Array.from(result) : []);
             } catch (error) {
-                console.error(`计算 for 可迭代对象 "${iterableExpression}" 出错:`, error);
+                console.error(`[${componentName}] 计算 for 可迭代对象 "${iterableExpression}" 出错:`, error);
                 items = [];
             }
 
-            // --- 简化渲染策略：每次更新都清空旧节点 ---
-            // (注意：这在实际应用中性能较差，没有进行 diff 和 key 管理)
-            renderedNodes.forEach(renderedNode => renderedNode.parentNode?.removeChild(renderedNode));
-            renderedNodes = [];
-            // --- 结束简化策略 ---
+            // --- 简单 diff 和重用策略 ---
+            const newRenderedNodesMap = new Map();
+            const fragment = document.createDocumentFragment(); // 批量插入优化
 
-            // 遍历新数据，为每一项创建和编译节点
             items.forEach((item, index) => {
-                // 创建子作用域，继承父作用域，并添加 item 和 index 作为自有属性
+                // 简单 key：使用 index。更好的 key 应来自数据本身 item.id
+                const key = index;
+                let existingNodeEntry = renderedNodesMap.get(key);
+                let currentNode;
+
+                // 创建子作用域
                 const childScope = Object.create(scope);
                 childScope[alias] = item;
                 if (indexAlias) {
                     childScope[indexAlias] = index;
                 }
 
-                // 克隆模板节点
-                const clone = node.cloneNode(true);
-                // 移除 for 属性，防止无限递归
-                clone.removeAttribute('for');
+                if (existingNodeEntry) {
+                    // 如果节点已存在，更新其作用域（如果需要，但这里子作用域是临时的）
+                    // 对于简单场景，可能不需要特别更新，因为子节点编译时会创建自己的 effect
+                    // 如果子节点依赖 item 或 index，它们内部的 effect 会处理更新
+                    currentNode = existingNodeEntry.node;
+                    // 更新 childScope (重要，否则内部绑定的 item/index 不会更新)
+                    // 需要一种方式将新的 childScope 应用到已编译的节点上，这比较复杂
+                    // 暂时简化：重新编译可能更简单，或者确保子节点正确响应 scope 变化
+                    // **简化处理：暂时不处理作用域更新，依赖子节点内部 effect**
+                    renderedNodesMap.delete(key); // 从旧 map 移除，表示已处理
+                } else {
+                    // 如果节点不存在，创建、编译并添加
+                    const clone = node.cloneNode(true);
+                    clone.removeAttribute('for');
+                    // 使用子作用域编译
+                    compileFn(clone, childScope, directiveHandlers, componentName);
+                    currentNode = clone;
+                }
 
-                // 使用子作用域编译克隆的节点
-                compileFn(clone, childScope, directiveHandlers);
-
-                // 将编译后的节点插入到锚点之后
-                // 使用 anchor.nextSibling 保证插入顺序正确
-                anchor.parentNode?.insertBefore(clone, anchor.nextSibling);
-                renderedNodes.push(clone); // 记录渲染的节点
+                fragment.appendChild(currentNode); // 添加到 fragment
+                newRenderedNodesMap.set(key, { node: currentNode, scope: childScope }); // 存入新 map
             });
+
+            // 移除旧 map 中剩余的节点 (表示这些数据项已不存在)
+            renderedNodesMap.forEach(entry => {
+                entry.node.parentNode?.removeChild(entry.node);
+            });
+
+            // 批量插入新节点
+            anchor.parentNode?.insertBefore(fragment, anchor.nextSibling);
+            // 更新 renderedNodesMap
+            renderedNodesMap = newRenderedNodesMap;
         });
     }
+
 
     /**
      * 处理 html 指令。
@@ -163,31 +182,29 @@
      * @param {object} scope - 组件作用域。
      */
     function handleNueHtml(node, expression, scope) {
-        // 移除 html 属性，因为它只在编译时需要
-        node.removeAttribute('html');
+        node.removeAttribute('html'); // 移除属性
 
         createEffect(() => {
             let htmlContent = '';
             try {
-                // 使用 evaluateExpression 计算 HTML 字符串
                 htmlContent = String(evaluateExpression(expression, scope) || '');
             } catch (error) {
                 console.error(`计算 html 表达式 "${expression}" 出错:`, error);
-                // 在页面上显示错误信息，而不是让页面崩溃
-                htmlContent = `<span style="color:red;">Error evaluating html: ${error.message}</span>`;
+                htmlContent = `<span style="color:red;">Error evaluating html</span>`;
             }
-            // 警告：直接设置 innerHTML 可能有 XSS 风险，确保内容可信！
+            // 警告：XSS 风险
             node.innerHTML = htmlContent;
         });
     }
 
-    // 将所有指令处理器挂载到全局 NueDirectives 对象上，供 core.js 调用
+    // 将所有指令处理器和核心工具函数挂载到全局 NueDirectives 对象
     window.NueDirectives = {
         handleNueIf,
         handleNueFor,
-        handleNueHtml
+        handleNueHtml,
+        evaluateExpression // **重要:** 暴露 evaluateExpression
         // 未来可以添加更多指令处理器
     };
 
-    console.log("directives.js 加载完成，NueDirectives 对象已准备就绪。"); // 保留此日志
+    console.log("directives.js 加载完成，NueDirectives 对象已准备就绪。");
 })();

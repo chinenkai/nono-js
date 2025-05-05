@@ -1,0 +1,59 @@
+<template>
+    <div class="child-container">
+        <h4>子组件</h4>
+        <p>从父组件接收的消息 (动态 Prop): <strong>{{ props.message() }}</strong></p>
+        <p>从父组件接收的静态 Prop: <em>{{ props.staticMessage }}</em></p>
+        <p>子组件内部状态: {{ internalCount() }}</p>
+        <button @click="incrementInternal">子组件按钮 (内部状态)</button>
+        <button @click="notifyParent">通知父组件 (发送事件)</button>
+    </div>
+</template>
+
+<script>
+    // props 和 emit 由框架自动注入，可以直接使用
+
+    // 子组件内部的响应式状态
+    const internalCount = createSignal(100);
+
+    // 子组件的方法
+    const incrementInternal = () => {
+        internalCount(internalCount() + 1);
+    };
+
+    const notifyParent = () => {
+        const payload = {
+            message: '来自子组件的消息!',
+            timestamp: Date.now(),
+            internalValue: internalCount() // 可以把内部状态也发出去
+        };
+        // 使用注入的 emit 函数发送事件
+        // 第一个参数是事件名，需要和父组件监听的 @事件名 匹配
+        // 第二个参数是可选的载荷 (payload)
+        emit('child-notified', payload);
+    };
+
+    // 子组件需要暴露给模板的内部状态和方法
+    return {
+        internalCount,
+        incrementInternal,
+        notifyParent,
+        props // 将 props 暴露给模板，这样模板可以用 {{ props.xxx }}
+    };
+</script>
+
+<style>
+    .child-container {
+        border: 1px dashed green;
+        padding: 10px;
+        margin-top: 15px;
+        background-color: #f0fff0; /* 淡绿色背景 */
+    }
+    .child-container h4 {
+        margin-top: 0;
+        color: green;
+    }
+    .child-container button {
+        background-color: #90ee90; /* 淡绿色按钮 */
+        border: 1px solid green;
+    }
+</style>

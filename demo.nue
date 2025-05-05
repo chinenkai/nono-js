@@ -1,116 +1,145 @@
 <template>
-    <h2>Nue 组件 Demo (带指令)</h2>
+    <h2>Nue 组件 Demo (带指令和子组件)</h2>
 
-    <!-- 基本计数器 -->
+    <!-- 基本计数器 (父组件状态) -->
     <div class="container">
-        <h3>计数器</h3>
+        <h3>父组件计数器</h3>
         <p>
-            当前计数值: <strong>{{ count() }}</strong>
+            父组件计数值: <strong>{{ count() }}</strong>
         </p>
-        <button @click="count(count() + 1)">加 1</button>
-        <button @click="add2ToCount()">加 2 (方法)</button>
+        <button @click="count(count() + 1)">父组件 加 1</button>
+        <button @click="add2ToCount()">父组件 加 2 (方法)</button>
     </div>
 
-    <!-- if 示例 -->
+    <!-- 父组件消息 (用于传递给子组件) -->
     <div class="container">
-        <h3>if 指令</h3>
+        <h3>父组件消息</h3>
+        <p>要传递给子组件的消息: {{ message() }}</p>
+        <button @click="changeMessage()">改变父组件消息 (会更新子组件)</button>
+    </div>
+
+    <!-- 使用子组件 -->
+    <div class="container">
+        <h3>子组件示例</h3>
+        <p>下面是子组件的内容:</p>
+        <!--
+            使用子组件标签 <child-component>
+            :message="message()" - 动态绑定父组件的 message Signal 给子组件的 message prop
+            static-message="这是来自父组件的静态问候" - 传递静态字符串给子组件的 staticMessage prop
+            @child-notified="handleChildEvent($event)" - 监听子组件发出的 'child-notified' 事件，
+                                                      并用父组件的 handleChildEvent 方法处理。
+                                                      $event 会是子组件 emit 时的 payload。
+        -->
+        <child-component
+            :message="message()"
+            static-message="这是来自父组件的静态问候"
+            @child-notified="handleChildEvent($event)"
+        ></child-component>
+
+        <p>来自子组件的最新消息: <strong>{{ childNotification() }}</strong></p>
+    </div>
+
+
+    <!-- if 示例 (父组件) -->
+    <div class="container">
+        <h3>if 指令 (父组件)</h3>
         <button @click="showDetails(!showDetails())">
-            {{ showDetails() ? '隐藏' : '显示' }} 详情
+            {{ showDetails() ? '隐藏' : '显示' }} 父组件详情
         </button>
         <div if="showDetails()">
-            <p>这是一段只有在 `showDetails()` 为真时才显示的详细信息。</p>
-            <p>当前计数值也是可见的: {{ count() }}</p>
+            <p>父组件的详细信息。</p>
+            <p>父组件计数值: {{ count() }}</p>
+            <!-- 可以在 if 块内使用子组件 -->
+             <child-component
+                :message="'消息 from if 块: ' + count()"
+                static-message="静态消息 from if"
+                @child-notified="handleChildEvent($event)"
+             ></child-component>
         </div>
-        <p if="!showDetails()">详情已隐藏。</p>
+        <p if="!showDetails()">父组件详情已隐藏。</p>
     </div>
 
-    <!-- for 示例 -->
+    <!-- for 示例 (父组件) -->
     <div class="container">
-        <h3>for 指令</h3>
-        <p>项目列表:</p>
+        <h3>for 指令 (父组件)</h3>
         <ul>
-            <!-- 模板元素，会被 for 克隆 -->
             <li for="(item, index) in items()">
-                索引 {{ index }}: {{ item.name }} (ID: {{ item.id }})
-                <span if="item.id === count()"> &lt;-- ID 与计数值相同!</span>
+                父列表项 {{ index }}: {{ item.name }}
+                <!-- 可以在 for 循环内使用子组件 -->
+                <child-component
+                    :message="`消息 for ${item.name}`"
+                    :static-message="`静态 for ${item.id}`"
+                    @child-notified="handleChildEvent({ ...$event, sourceItem: item.name })"
+                ></child-component>
             </li>
         </ul>
-        <button @click="addItem()">添加项目</button>
-        <button @click="removeItem()">移除最后一项</button>
-        <button @click="shuffleItems()">打乱顺序</button>
-    </div>
-
-    <!-- html 示例 -->
-    <div class="container">
-        <h3>html 指令</h3>
-        <p>下面的内容由 `message()` 提供，并作为 HTML 解析:</p>
-        <div html="message()"></div>
-        <button @click="changeMessage()">改变消息 (含 HTML)</button>
+        <button @click="addItem()">添加父列表项</button>
     </div>
 
 </template>
 
 <script>
-    // --- 响应式状态 ---
+    // --- 父组件响应式状态 ---
     const count = createSignal(0);
     const showDetails = createSignal(false);
     const items = createSignal([
         { id: 1, name: '苹果' },
         { id: 2, name: '香蕉' }
     ]);
-    const message = createSignal('这是 <strong>默认</strong> 消息.');
+    const message = createSignal('这是 <strong>默认</strong> 父消息.');
+    const childNotification = createSignal('等待子组件消息...'); // 用于显示子组件发来的消息
 
-    // --- 方法 ---
+    // --- 父组件方法 ---
     const add2ToCount = function() {
-        console.log("demo.nue: 执行 add2ToCount");
         count(count() + 2);
     };
 
     const addItem = function() {
-        const currentItems = items(); // 读取当前数组
-        const newItemId = currentItems.length > 0 ? Math.max(...currentItems.map(i => i.id)) + 1 : 1;
-        // 创建一个新数组并写入 Signal
-        items([...currentItems, { id: newItemId, name: `新水果 ${newItemId}` }]);
-    };
-
-    const removeItem = function() {
         const currentItems = items();
-        if (currentItems.length > 0) {
-            items(currentItems.slice(0, -1)); // 移除最后一项
-        }
-    };
-
-    const shuffleItems = function() {
-        const currentItems = [...items()]; // 创建副本
-        for (let i = currentItems.length - 1; i > 0; i--) {
-            const j = Math.floor(Math.random() * (i + 1));
-            [currentItems[i], currentItems[j]] = [currentItems[j], currentItems[i]]; // 交换
-        }
-        items(currentItems); // 写入打乱后的数组
+        const newItemId = currentItems.length > 0 ? Math.max(...currentItems.map(i => i.id)) + 1 : 1;
+        items([...currentItems, { id: newItemId, name: `新水果 ${newItemId}` }]);
     };
 
     const changeMessage = function() {
         const randomNum = Math.random().toFixed(2);
-        message(`<i>更新于 ${new Date().toLocaleTimeString()}</i>: 随机数 <b>${randomNum}</b>`);
+        message(`<i>父消息更新于 ${new Date().toLocaleTimeString()}</i>: 随机数 <b>${randomNum}</b>`);
     };
 
-    // **新增：显式返回需要暴露给模板的作用域对象**
-    // 列出所有模板中需要用到的变量和函数
+    // **新增:** 处理子组件事件的方法
+    // 参数 payload 就是子组件 emit 时传递的第二个参数 ($event)
+    const handleChildEvent = function(payload) {
+        console.log("父组件 demo.nue 收到子组件事件 'child-notified':", payload);
+        // 更新父组件的状态以显示收到的消息
+        let notificationText = `收到: "${payload.message}" (来自 ${payload.sourceItem || '未知项'}) at ${new Date(payload.timestamp).toLocaleTimeString()}`;
+        if (payload.internalValue !== undefined) {
+            notificationText += ` | 子组件内部值: ${payload.internalValue}`;
+        }
+        childNotification(notificationText);
+
+        // 父组件也可以根据子组件事件做其他事情，比如修改自己的状态
+        // count(count() + 10); // 例如：每次收到子组件消息，父组件计数器加 10
+    };
+
+    // **修改:** 显式返回需要暴露给模板的作用域对象
+    // 包括新增的 childNotification 和 handleChildEvent
     return {
-        count: count,
-        showDetails: showDetails,
-        items: items,
-        message: message,
-        add2ToCount: add2ToCount,
-        addItem: addItem,
-        removeItem: removeItem,
-        shuffleItems: shuffleItems,
-        changeMessage: changeMessage
+        count,
+        showDetails,
+        items,
+        message,
+        childNotification, // 新增
+        add2ToCount,
+        addItem,
+        // removeItem, // 如果不用可以注释掉
+        // shuffleItems, // 如果不用可以注释掉
+        changeMessage,
+        handleChildEvent // 新增
     };
 </script>
 
 
 <style>
+/* 父组件样式 (保持不变) */
 body {
     font-family: sans-serif;
     padding: 20px;
@@ -122,6 +151,7 @@ body {
     padding: 15px;
     margin-bottom: 20px;
     border-radius: 5px;
+    background-color: #f9f9f9;
 }
 h2, h3 {
     margin-top: 0;
@@ -131,17 +161,24 @@ button {
     margin-right: 8px;
     margin-top: 5px;
     cursor: pointer;
+    background-color: #e7e7e7;
+    border: 1px solid #ccc;
 }
 ul {
     padding-left: 20px;
 }
 li {
-    margin-bottom: 5px;
+    margin-bottom: 10px; /* 增加一点间距 */
+    border-bottom: 1px dotted #eee;
+    padding-bottom: 10px;
 }
 strong {
     color: #d9534f; /* 红色 */
 }
-/* html 示例的样式 */
+em {
+    color: blue; /* 蓝色 */
+}
+/* html 示例的样式 (如果还用的话) */
 .container div[html] {
     border: 1px dashed blue;
     padding: 10px;
