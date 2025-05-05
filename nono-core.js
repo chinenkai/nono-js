@@ -45,6 +45,14 @@ function createEffect(fn) {
 const componentCache = new Map(); // 缓存已加载和解析的组件数据
 
 // ==================================
+// 2.5. 组件卸载清理注册表 (新增)
+// ==================================
+// 使用 WeakMap 存储组件根元素与其 onUnmount 回调的映射
+// WeakMap 的键必须是对象 (DOM 元素)，当元素被垃圾回收时，映射会自动移除，防止内存泄漏
+const componentCleanupRegistry = new WeakMap();
+
+
+// ==================================
 // 3. 组件处理
 // ==================================
 
@@ -475,6 +483,49 @@ function injectStyles(css, componentUrl) {
 }
 
 /**
+ * 清理节点及其子孙节点（执行 onUnmount 钩子），然后从 DOM 中移除该节点。
+ * @param {Node} node - 要清理和移除的 DOM 节点。
+ */
+function cleanupAndRemoveNode(node) {
+    if (!node) return;
+
+    // 1. 递归清理子节点 (仅处理元素节点)
+    // 从后往前遍历子节点，这样在移除子节点时不会影响后续节点的索引
+    if (node.nodeType === Node.ELEMENT_NODE && node.hasChildNodes()) {
+        const children = Array.from(node.childNodes); // 创建副本以安全迭代
+        for (let i = children.length - 1; i >= 0; i--) {
+            cleanupAndRemoveNode(children[i]); // 递归调用
+        }
+    }
+
+    // 2. 清理当前节点 (如果是已注册的组件根元素)
+    // 只对元素节点检查清理回调
+    if (node.nodeType === Node.ELEMENT_NODE) {
+        const cleanupCallback = componentCleanupRegistry.get(node);
+        if (typeof cleanupCallback === 'function') {
+            try {
+                console.log(`[核心] 调用组件 ${node.tagName.toLowerCase()} 的 onUnmount 钩子...`);
+                cleanupCallback(); // 执行 onUnmount
+            } catch (error) {
+                console.error(`[核心] 执行 onUnmount 钩子时出错 (元素: ${node.outerHTML.substring(0, 100)}...):`, error);
+            }
+            // 从注册表中移除，即使上面出错也要移除，避免重复调用
+            componentCleanupRegistry.delete(node);
+        }
+    }
+
+    // 3. 从 DOM 中移除节点
+    // 确保节点仍然有父节点才执行移除
+    if (node.parentNode) {
+        node.parentNode.removeChild(node);
+    } else {
+        // 如果节点已经没有父节点（可能在清理过程中被移除），则无需操作
+        // console.log("[核心] 节点已无父节点，跳过移除:", node);
+    }
+}
+
+
+/**
  * 挂载组件到目标位置
  * @param {string} componentUrl .nue 文件的 URL
  * @param {string | Element | Comment} target - CSS 选择器、目标元素或占位符注释节点
@@ -488,7 +539,7 @@ async function mountComponent(componentUrl, target, initialProps = {}, eventHand
     let targetElement = null; // 挂载的目标 DOM 节点
     let isPlaceholder = false; // 标记 target 是否是占位符注释
 
-    // 1. 解析挂载目标
+    // --- 1. 解析挂载目标 ---
     if (typeof target === 'string') {
         targetElement = document.querySelector(target);
         if (!targetElement) {
@@ -509,23 +560,33 @@ async function mountComponent(componentUrl, target, initialProps = {}, eventHand
          return null;
     }
 
-    // 2. 检查依赖 (Acorn, 指令处理器)
+    // --- 2. 检查依赖 ---
     if (typeof window.acorn === 'undefined') {
         console.error("[核心] Acorn 解析器 (acorn.js) 未加载！");
-        if (targetElement && !isPlaceholder) targetElement.innerHTML = `<p style="color: red;">错误：acorn.js 未加载</p>`;
-        else if (isPlaceholder) targetElement.parentNode?.insertBefore(document.createTextNode(' [Acorn 加载错误] '), targetElement.nextSibling);
+        // 在目标位置显示错误信息
+        if (targetElement && !isPlaceholder && targetElement instanceof Element) {
+             targetElement.innerHTML = `<p style="color: red;">错误：acorn.js 未加载</p>`;
+        } else if (isPlaceholder && targetElement.parentNode) {
+            const errorNode = document.createTextNode(' [Acorn 加载错误] ');
+            targetElement.parentNode.insertBefore(errorNode, targetElement.nextSibling);
+        }
         return null;
     }
      if (typeof window.NueDirectives === 'undefined' || typeof window.NueDirectives.evaluateExpression !== 'function') {
          console.error("[核心] 指令处理器 (nono-directives.js) 或其 evaluateExpression 未加载！");
-         if (targetElement && !isPlaceholder) targetElement.innerHTML = `<p style="color: red;">错误：nono-directives.js 未加载</p>`;
-         else if (isPlaceholder) targetElement.parentNode?.insertBefore(document.createTextNode(' [Directives 加载错误] '), targetElement.nextSibling);
+         // 在目标位置显示错误信息
+         if (targetElement && !isPlaceholder && targetElement instanceof Element) {
+             targetElement.innerHTML = `<p style="color: red;">错误：nono-directives.js 未加载</p>`;
+         } else if (isPlaceholder && targetElement.parentNode) {
+             const errorNode = document.createTextNode(' [Directives 加载错误] ');
+             targetElement.parentNode.insertBefore(errorNode, targetElement.nextSibling);
+         }
          return null;
     }
 
 
     try {
-        // 3. 加载组件文件 (使用缓存)
+        // --- 3. 加载组件文件 (使用缓存) ---
         let componentText;
         let cacheEntry = componentCache.get(componentUrl);
         if (cacheEntry && cacheEntry.text) {
@@ -533,55 +594,59 @@ async function mountComponent(componentUrl, target, initialProps = {}, eventHand
             console.log(`[核心] 从缓存加载 ${componentUrl}`);
         } else {
             console.log(`[核心] 正在加载 ${componentUrl}...`);
-            const response = await fetch(componentUrl);
-            if (!response.ok) throw new Error(`加载组件失败: ${response.status} ${response.statusText}`);
-            componentText = await response.text();
+            const response = await fetch(componentUrl); // 定义 response
+            if (!response.ok) { // 使用 response
+                throw new Error(`加载组件失败: ${response.status} ${response.statusText}`);
+            }
+            componentText = await response.text(); // 使用 response
             // 使用 componentUrl 作为主键缓存文本和后续解析结果
             cacheEntry = { text: componentText };
             componentCache.set(componentUrl, cacheEntry);
             console.log("[核心] 组件加载完成.");
         }
 
-        // 4. 解析组件结构 (使用缓存)
+        // --- 4. 解析组件结构 (使用缓存) ---
         if (!cacheEntry.structure) {
             cacheEntry.structure = parseComponentStructure(componentText);
         }
         const { template, script, style } = cacheEntry.structure;
 
-        // 5. 解析脚本 AST (使用缓存)
+        // --- 5. 解析脚本 AST (使用缓存) ---
         if (!cacheEntry.ast && script.trim()) { // 只有在有脚本时才解析
             cacheEntry.ast = parseScriptWithAcorn(script);
         }
         const ast = cacheEntry.ast; // 可能为 null
 
-        // 6. 创建 emit 函数
+        // --- 6. 创建 emit 函数 ---
         const emit = createEmitFunction(eventHandlers, componentName);
 
-        // 7. 执行脚本获取作用域 (注入 props 和 emit)
+        // --- 7. 执行脚本获取作用域 (注入 props 和 emit) ---
         const componentScope = executeScript(script, ast, initialProps, emit);
 
-        // 8. 编译模板
+        // --- 8. 编译模板 ---
         console.log(`[核心] 开始编译 ${componentName} 的模板...`);
         const fragment = document.createDocumentFragment();
-        const tempDiv = document.createElement('div'); // 临时容器解析 HTML
+        const tempDiv = document.createElement('div');
+        // trim() 很重要，去除模板前后可能存在的空白文本节点，有助于找到正确的 firstElementChild
         tempDiv.innerHTML = template.trim();
         // 将临时容器的子节点移动到 fragment
         while (tempDiv.firstChild) {
             fragment.appendChild(tempDiv.firstChild);
         }
 
+        // 在插入 DOM 前，先获取 fragment 中的第一个元素节点引用
+        // 这个引用在 fragment 被插入后仍然有效
+        const potentialRootElementInFragment = fragment.firstElementChild;
+
         // 对 fragment 的顶级节点进行编译，传入组件名和指令处理器
         Array.from(fragment.childNodes).forEach(node => compileNode(node, componentScope, window.NueDirectives, componentName));
         console.log(`[核心] ${componentName} 模板编译完成.`);
 
-        // 9. 注入样式 (内部会检查是否已注入)
+        // --- 9. 注入样式 (内部会检查是否已注入) ---
         injectStyles(style, componentUrl);
 
-        // 10. 挂载到目标
-        let mountedRootElement = null;
-        // 查找编译后 fragment 中的第一个元素节点作为挂载的根
-        // fragment.firstElementChild 在没有元素子节点时为 null
-        mountedRootElement = fragment.querySelector('*') || fragment.firstChild; // 回退到第一个子节点（可能是文本）
+        // --- 10. 挂载到目标 ---
+        let mountedRootElement = null; // 初始化，存储实际挂载的第一个元素节点
 
         if (isPlaceholder) {
             // 如果是挂载到占位符，用 fragment 内容替换占位符
@@ -589,15 +654,16 @@ async function mountComponent(componentUrl, target, initialProps = {}, eventHand
             if (parent) {
                  // 插入 fragment 的所有子节点到占位符之前
                  parent.insertBefore(fragment, targetElement);
-                 // 找到实际插入的第一个元素节点（如果存在）
-                 let firstInsertedNode = targetElement.previousSibling;
-                 while(firstInsertedNode && firstInsertedNode.nodeType !== Node.ELEMENT_NODE) {
-                     firstInsertedNode = firstInsertedNode.previousSibling;
-                 }
-                 mountedRootElement = firstInsertedNode; // 可能为 null
+                 // 使用之前在 fragment 中找到的元素引用
+                 // 这个 potentialRootElementInFragment 对象现在已经在主 DOM 中了
+                 mountedRootElement = potentialRootElementInFragment;
                  // 移除占位符注释节点
                  parent.removeChild(targetElement);
                  console.log(`[核心] 组件 ${componentName} 内容已替换占位符。`);
+                 // 检查是否成功找到了根元素
+                 if (!mountedRootElement) {
+                     console.warn(`[核心] 组件 ${componentName} 挂载后未找到根元素节点 (检查模板是否以元素开头)。生命周期钩子可能无法正确关联。`);
+                 }
             } else {
                  // 这理论上不应该发生，因为前面检查过 parentNode
                  console.error(`[核心] 占位符 ${componentName} 的父节点丢失，无法挂载。`);
@@ -605,31 +671,83 @@ async function mountComponent(componentUrl, target, initialProps = {}, eventHand
             }
         } else {
             // 如果是挂载到元素，清空并附加
-            targetElement.innerHTML = '';
-            targetElement.appendChild(fragment);
+            targetElement.innerHTML = ''; // 清空目标
+            targetElement.appendChild(fragment); // 附加内容
             // 挂载后，第一个元素子节点就是根元素
             mountedRootElement = targetElement.firstElementChild;
+            if (!mountedRootElement) {
+                 console.warn(`[核心] 组件 ${componentName} 挂载后未找到根元素节点。生命周期钩子可能无法正确关联。`);
+            }
             console.log(`[核心] 组件 ${componentName} 成功挂载到`, targetElement);
         }
 
+        // --- 11. 执行 onMount 和 注册 onUnmount ---
+        if (mountedRootElement) { // 确保我们有一个有效的根元素 (Element node)
+            // 11.1 注册 onUnmount (如果存在)
+            if (typeof componentScope.onUnmount === 'function') {
+                console.log(`[核心] 注册组件 ${componentName} 的 onUnmount 钩子 (根元素: ${mountedRootElement.tagName})`);
+                // 将根元素和 onUnmount 回调关联起来
+                componentCleanupRegistry.set(mountedRootElement, componentScope.onUnmount);
+            } else if (componentScope.hasOwnProperty('onUnmount')) {
+                // 如果定义了 onUnmount 但不是函数，发出警告
+                console.warn(`[核心] 组件 ${componentName} 定义了 onUnmount，但它不是一个函数。`);
+            }
+
+            // 11.2 执行 onMount (如果存在)
+            // 使用 Promise.resolve().then() 将 onMount 推迟到下一个微任务队列
+            // 这样可以确保浏览器有时间完成当前的渲染批次，且 onUnmount 已注册
+            Promise.resolve().then(() => {
+                // 在执行 onMount 前回调前，再次检查根元素是否还在 DOM 中
+                // 防止在异步回调执行前，组件就被快速移除（例如在 n-if 中）
+                if (!mountedRootElement || !mountedRootElement.isConnected) {
+                    console.log(`[核心] 组件 ${componentName} 的根元素在 onMount 触发前已从 DOM 移除，跳过 onMount 调用。`);
+                    return;
+                }
+                // 检查 onMount 是否是函数
+                if (typeof componentScope.onMount === 'function') {
+                    try {
+                        console.log(`[核心] 调用组件 ${componentName} 的 onMount 钩子...`);
+                        componentScope.onMount(); // 执行 onMount
+                    } catch (error) {
+                        console.error(`[核心] 执行 onMount 钩子时出错 (组件: ${componentName}):`, error);
+                    }
+                } else if (componentScope.hasOwnProperty('onMount')) {
+                    // 如果定义了 onMount 但不是函数，发出警告
+                     console.warn(`[核心] 组件 ${componentName} 定义了 onMount，但它不是一个函数。`);
+                }
+            });
+
+        } else {
+            // 如果没有找到根元素，检查是否定义了钩子并发出警告
+             if (typeof componentScope.onMount === 'function' || typeof componentScope.onUnmount === 'function') {
+                 console.warn(`[核心] 组件 ${componentName} 定义了 onMount/onUnmount 钩子，但未能找到有效的根元素进行关联。钩子可能不会被调用。`);
+             }
+        }
+
         console.log(`[核心] ${componentName} (${componentUrl}) 挂载流程结束.`);
-        // 返回实际挂载的第一个元素节点（或第一个节点），供子组件逻辑使用
-        return mountedRootElement instanceof Element ? mountedRootElement : null; // 确保返回的是 Element 或 null
+        // 返回实际挂载的第一个元素节点（或 null），供父组件逻辑使用
+        return mountedRootElement;
 
     } catch (error) {
         console.error(`[核心] 挂载组件 ${componentName} (${componentUrl}) 时发生错误:`, error);
         const errorMsg = `加载/编译组件 ${componentName} 失败: ${error.message}`;
-        if (targetElement && !isPlaceholder) {
-             targetElement.innerHTML = `<pre style="color: red;">${errorMsg}\n${error.stack || ''}</pre>`;
+        // 在目标位置显示错误信息
+        if (targetElement && !isPlaceholder && targetElement instanceof Element) {
+             targetElement.innerHTML = `<pre style="color: red; white-space: pre-wrap; word-break: break-all;">${errorMsg}\n${error.stack || ''}</pre>`;
         } else if (isPlaceholder && targetElement.parentNode) {
             // 在占位符后插入错误信息
             const errorNode = document.createElement('div');
-            errorNode.style.color = 'red'; errorNode.textContent = errorMsg;
+            errorNode.style.color = 'red';
+            errorNode.style.whiteSpace = 'pre-wrap';
+            errorNode.style.wordBreak = 'break-all';
+            errorNode.textContent = `${errorMsg}\n${error.stack || ''}`;
             targetElement.parentNode.insertBefore(errorNode, targetElement.nextSibling);
         }
         return null; // 返回 null 表示失败
     }
 }
+
+
 
 // 暴露核心 API 到全局
 window.NueCore = {
@@ -637,7 +755,7 @@ window.NueCore = {
     createSignal, // 暴露给组件脚本和指令
     createEffect,  // 暴露给指令等
     compileNode,    // 暴露给指令（如 n-if, n-for）进行递归编译
-    // 注意：evaluateExpression 由 nono-directives.js 提供并挂载到 NueDirectives 上
+    cleanupAndRemoveNode,
 };
 
 console.log("nono-core.js 加载完成，NueCore 对象已准备就绪。");
