@@ -1,10 +1,11 @@
+// nono-core.js
+
 // ==================================
 // 1. Signal 核心实现 (保持不变)
 // ==================================
 let currentEffect = null;
 
 function createSignal(initialValue) {
-    // ... (代码和之前一样) ...
     let value = initialValue;
     const subscribers = new Set();
 
@@ -17,6 +18,7 @@ function createSignal(initialValue) {
         } else { // 写入
             if (value !== newValue) {
                 value = newValue;
+                // 使用 [...subscribers] 创建副本，防止在迭代过程中修改 Set 导致问题
                 [...subscribers].forEach(effect => effect());
             }
             return newValue;
@@ -26,12 +28,15 @@ function createSignal(initialValue) {
 }
 
 function createEffect(fn) {
-    // ... (代码和之前一样) ...
     const effect = () => {
         currentEffect = effect;
-        try { fn(); } finally { currentEffect = null; }
+        try {
+            fn();
+        } finally {
+            currentEffect = null;
+        }
     };
-    effect();
+    effect(); // 立即执行一次以建立初始依赖
 }
 
 // ==================================
@@ -81,18 +86,15 @@ function parseScriptWithAcorn(scriptContent) {
     }
     console.log("使用 Acorn 解析脚本...");
     try {
-        // 使用 Acorn 解析。
-        // *** 修改点：添加 allowReturnOutsideFunction: true 选项 ***
         const ast = acorn.parse(scriptContent, {
             ecmaVersion: 2020,
-            sourceType: "module", // 或者 "script"，取决于你的代码是否包含 import/export
-            allowReturnOutsideFunction: true // <--- 允许顶层 return
+            sourceType: "module",
+            allowReturnOutsideFunction: true // 允许顶层 return
         });
         console.log("Acorn 解析成功.");
-        // console.log("AST:", ast);
         return ast;
     } catch (error) {
-        console.error("Acorn 解析脚本失败:", error); // <--- 错误在这里被捕获和报告
+        console.error("Acorn 解析脚本失败:", error);
         console.error("问题脚本:\n", scriptContent);
         return null;
     }
@@ -100,15 +102,21 @@ function parseScriptWithAcorn(scriptContent) {
 
 
 /**
+ * 执行组件脚本，获取其作用域
  * @param {string} scriptContent 脚本字符串
- * @param {object} ast Acorn 解析出的 AST (可选)
+ * @param {object} ast Acorn 解析出的 AST (可选, 当前未使用，但保留以备将来分析)
  * @param {object} [initialProps={}] 父组件传递的 Props 对象 (键是 prop 名称，值是 Signal 或静态值)
  * @param {Function} [emit=()=>{}] 子组件用于触发事件的函数
  * @returns {object} 组件的作用域对象 (由脚本显式 return 返回)
  */
-function executeScript(scriptContent, ast, initialProps = {}, emit = () => console.warn("emit function not provided")) {
-    if (ast === null) {
-        console.warn("由于脚本解析失败，跳过执行。");
+function executeScript(scriptContent, ast, initialProps = {}, emit = () => console.warn("emit 函数未提供")) {
+    // ast 参数当前未使用，但保留接口
+    if (!scriptContent.trim()) {
+        console.log("脚本内容为空，返回空作用域。");
+        return {}; // 如果没有 script 标签，返回空对象
+    }
+    if (ast === null && scriptContent.trim()) { // 只有在脚本不为空但解析失败时才警告
+        console.warn("由于脚本解析失败，跳过执行。将返回空作用域。");
         return {};
     }
 
@@ -131,8 +139,10 @@ function executeScript(scriptContent, ast, initialProps = {}, emit = () => conso
             return componentScope;
         } else {
             console.warn("脚本执行了，但没有返回一个对象作为作用域。请确保脚本最后有 'return { ... };' 语句。将返回空作用域。");
-            if (typeof componentScope === 'undefined') {
-                console.warn("提示：脚本似乎缺少最后的 'return { ... };' 语句。");
+            if (typeof componentScope === 'undefined' && scriptContent.includes('return')) {
+                 console.warn("提示：脚本包含 return 语句，但似乎未在顶层返回对象。");
+            } else if (typeof componentScope === 'undefined' && !scriptContent.includes('return')) {
+                 console.warn("提示：脚本似乎缺少最后的 'return { ... };' 语句。");
             }
             return {};
         }
@@ -144,11 +154,12 @@ function executeScript(scriptContent, ast, initialProps = {}, emit = () => conso
 }
 
 /**
+ * 创建供子组件使用的 emit 函数
  * @param {object} eventHandlers - 父组件提供的事件处理器映射 { eventName: handlerFunc }
  * @param {string} componentName - 用于日志记录的组件名
  * @returns {Function} emit 函数 (eventName, payload) => void
  */
-function createEmitFunction(eventHandlers, componentName = 'ChildComponent') {
+function createEmitFunction(eventHandlers, componentName = '子组件') {
     return function emit(eventName, payload) {
         console.log(`${componentName} 发出事件: ${eventName}`, payload);
         const handler = eventHandlers[eventName];
@@ -166,231 +177,281 @@ function createEmitFunction(eventHandlers, componentName = 'ChildComponent') {
 
 
 /**
+ * 编译 DOM 节点，处理指令和插值
  * @param {Node} node 当前处理的 DOM 节点
  * @param {object} scope 组件的作用域对象
- * @param {object} directiveHandlers 包含指令处理函数的对象
- * @param {string} [parentComponentName='Root'] 父组件名称，用于日志
+ * @param {object} directiveHandlers 包含指令处理函数的对象 (来自 nono-directives.js)
+ * @param {string} [parentComponentName='根组件'] 父组件名称，用于日志
  */
-function compileNode(node, scope, directiveHandlers, parentComponentName = 'Root') {
-    if (node.nodeType === Node.ELEMENT_NODE) {
-        const tagName = node.tagName.toLowerCase();
+function compileNode(node, scope, directiveHandlers, parentComponentName = '根组件') {
+    // 确保指令处理器已加载
+    if (!directiveHandlers || typeof directiveHandlers.evaluateExpression !== 'function') {
+        console.error(`[${parentComponentName}] 指令处理器 (NueDirectives) 或 evaluateExpression 未准备好，编译中止。`);
+        return;
+    }
 
-        // **新增:** 检查是否是潜在的子组件标签 (简单约定：包含连字符)
-        // 更健壮的方式是维护一个组件注册表
+    // 1. 处理元素节点 (Element Node)
+    if (node.nodeType === Node.ELEMENT_NODE) {
+        const element = node; // 类型断言，方便使用 Element API
+        const tagName = element.tagName.toLowerCase();
+
+        // 1.1 检查是否是子组件标签 (简单约定：包含连字符，且不是内置标签)
         if (tagName.includes('-') && !['template', 'script', 'style'].includes(tagName)) {
             console.log(`[${parentComponentName}] 发现潜在子组件标签: <${tagName}>`);
-            // 假设标签名对应组件文件名，例如 'child-component' -> 'child-component.nue'
-            const componentUrl = `${tagName}.nue`;
+            const componentUrl = `${tagName}.nue`; // 约定组件名对应文件名
 
-            // **新增:** 解析 Props 和事件监听器
             const initialProps = {};
             const eventHandlers = {};
             const attributesToRemove = []; // 记录需要移除的属性
 
-            for (const attr of Array.from(node.attributes)) {
+            // 1.1.1 解析 Props 和事件监听器
+            for (const attr of Array.from(element.attributes)) {
                 const attrName = attr.name;
                 const attrValue = attr.value;
 
-                if (attrName.startsWith(':')) { // 动态 Prop (绑定)
+                if (attrName.startsWith(':')) { // 动态 Prop (属性绑定)
                     const propName = attrName.substring(1);
                     const expression = attrValue;
                     console.log(`[${parentComponentName}] 解析动态 Prop :${propName}="${expression}"`);
-                    // 创建一个 Signal 来包装父组件的表达式，确保子组件能响应式地接收更新
-                    const propSignal = createSignal(undefined); // 初始值设为 undefined
-                    // 在父组件作用域内创建一个 effect 来更新这个 propSignal
+                    const propSignal = createSignal(undefined);
                     createEffect(() => {
                         try {
-                            // 使用父组件的 scope 来计算表达式
                             const value = directiveHandlers.evaluateExpression(expression, scope);
-                            // console.log(`[${parentComponentName}] 更新 Prop :${propName} 的值 ->`, value);
-                            propSignal(value); // 更新 Signal
+                            propSignal(value);
                         } catch (error) {
                             console.error(`[${parentComponentName}] 计算 Prop "${propName}" 表达式 "${expression}" 出错:`, error);
-                            propSignal(undefined); // 出错时设为 undefined
+                            propSignal(undefined);
                         }
                     });
-                    initialProps[propName] = propSignal; // 将 Signal 传递给子组件
+                    initialProps[propName] = propSignal;
                     attributesToRemove.push(attrName);
 
                 } else if (attrName.startsWith('@')) { // 事件监听器
                     const eventName = attrName.substring(1);
                     const handlerExpression = attrValue;
                     console.log(`[${parentComponentName}] 解析事件监听 @${eventName}="${handlerExpression}"`);
-                    // 创建一个在父组件作用域内执行的处理函数
                     eventHandlers[eventName] = (payload) => {
                         console.log(`[${parentComponentName}] 接收到子组件事件 "${eventName}"，执行: ${handlerExpression}`, payload);
                         try {
-                            // 将 payload 注入到执行上下文中，通常命名为 'event' 或 '$event'
                             const context = Object.create(scope);
-                            context.$event = payload; // 使用 $event 作为载荷变量名
-                            const argNames = ['context'];
-                            const argValues = [context];
-                            // 注意：事件处理器通常不需要 return
-                            const handlerFunction = new Function(...argNames, `with(context) { ${handlerExpression} }`);
-                            handlerFunction.apply(null, argValues);
+                            context.$event = payload;
+                            // --- 子组件事件处理器的执行逻辑 ---
+                            // 与普通元素事件处理类似，需要检查是否需要调用返回的函数
+                            const result = directiveHandlers.evaluateExpression(handlerExpression, context);
+                            const trimmedHandler = handlerExpression.trim();
+                            const isSimpleIdentifier = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(trimmedHandler);
+
+                            if (isSimpleIdentifier && typeof result === 'function') {
+                                console.log(`[${parentComponentName}] (子组件事件) 检测到简单函数名 "${trimmedHandler}"，将调用返回的函数。`);
+                                result.call(scope, payload); // 将 payload 作为参数传递给处理器
+                            } else {
+                                console.log(`[${parentComponentName}] (子组件事件) 表达式 "${trimmedHandler}" 已由 evaluateExpression 执行。`);
+                            }
+                            // --- 结束：子组件事件处理器的执行逻辑 ---
                         } catch (error) {
-                            console.error(`[${parentComponentName}] 执行事件处理器 "${handlerExpression}" 出错:`, error);
+                            console.error(`[${parentComponentName}] 执行子组件事件处理器 "${handlerExpression}" 出错:`, error);
                         }
                     };
                     attributesToRemove.push(attrName);
 
                 } else { // 静态 Prop
                     console.log(`[${parentComponentName}] 解析静态 Prop ${attrName}="${attrValue}"`);
-                    // 静态 prop 直接传递值，不需要 signal
                     initialProps[attrName] = attrValue;
-                    // 静态属性通常也应该移除，避免传递给最终的 HTML 元素
                     attributesToRemove.push(attrName);
                 }
             }
 
             // 移除已处理的特殊属性
-            attributesToRemove.forEach(attrName => node.removeAttribute(attrName));
+            attributesToRemove.forEach(attrName => element.removeAttribute(attrName));
 
-            // **新增:** 异步挂载子组件
-            // 创建一个占位符节点，子组件挂载后会替换它
+            // 1.1.2 异步挂载子组件
             const placeholder = document.createComment(`component: ${tagName}`);
-            node.parentNode?.replaceChild(placeholder, node);
+            // 确保在替换前 placeholder 有父节点
+            if (!element.parentNode) {
+                console.error(`[${parentComponentName}] 尝试挂载子组件 <${tagName}> 时，其原始位置已脱离 DOM。`);
+                return; // 无法挂载
+            }
+            element.parentNode.replaceChild(placeholder, element);
 
-            // 调用 mountComponent (或一个包装器) 来加载和挂载子组件
-            // 注意：mountComponent 现在需要返回挂载的 DOM 节点
             mountComponent(componentUrl, placeholder, initialProps, eventHandlers, tagName /*传递组件名用于日志*/)
                 .then(mountedNode => {
-                    if (mountedNode && placeholder.parentNode) {
-                        // 用实际挂载的子组件根节点替换占位符
-                        placeholder.parentNode.replaceChild(mountedNode, placeholder);
-                        console.log(`[${parentComponentName}] 子组件 <${tagName}> 挂载完成.`);
+                    if (mountedNode) {
+                        console.log(`[${parentComponentName}] 子组件 <${tagName}> 挂载完成 (节点已由 mountComponent 插入).`);
                     } else {
-                         console.error(`[${parentComponentName}] 子组件 <${tagName}> 挂载失败或占位符已移除.`);
-                         // 可以在占位符处插入错误信息
-                         const errorNode = document.createElement('div');
-                         errorNode.style.color = 'red';
-                         errorNode.textContent = `Error mounting <${tagName}>`;
-                         placeholder.parentNode?.insertBefore(errorNode, placeholder.nextSibling);
+                        console.error(`[${parentComponentName}] 子组件 <${tagName}> 挂载失败 (mountComponent 未能成功返回节点). 请检查之前的日志获取详细错误信息.`);
                     }
                 })
                 .catch(error => {
-                    console.error(`[${parentComponentName}] 挂载子组件 <${tagName}> (${componentUrl}) 失败:`, error);
-                     // 可以在占位符处插入错误信息
-                     const errorNode = document.createElement('div');
-                     errorNode.style.color = 'red';
-                     errorNode.textContent = `Error loading/mounting <${tagName}>: ${error.message}`;
-                     placeholder.parentNode?.insertBefore(errorNode, placeholder.nextSibling);
+                    console.error(`[${parentComponentName}] 调用 mountComponent 挂载子组件 <${tagName}> (${componentUrl}) 时发生异步错误:`, error);
                 });
 
             // 子组件已交由 mountComponent 处理，不再递归编译此节点
             return;
         }
 
-        // --- 处理非组件元素 (原有逻辑) ---
-
-        // 优先处理结构性指令 if, for
-        const ifAttr = node.getAttribute('if');
-        const forAttr = node.getAttribute('for');
-
-        if (ifAttr !== null) {
-            // 传递 parentComponentName
-            directiveHandlers.handleNueIf(node, ifAttr, scope, compileNode, directiveHandlers, parentComponentName);
-            return;
-        }
-        if (forAttr !== null) {
-             // 传递 parentComponentName
-            directiveHandlers.handleNueFor(node, forAttr, scope, compileNode, directiveHandlers, parentComponentName);
+        // 1.2 处理结构性指令 (n-if, n-for) - 这些指令会改变 DOM 结构，优先处理
+        const nIfAttr = element.getAttribute('n-if');
+        if (nIfAttr !== null) {
+            directiveHandlers.handleNIf(element, nIfAttr, scope, compileNode, directiveHandlers, parentComponentName);
             return;
         }
 
-        // 处理其他属性指令，如 html
-        const htmlAttr = node.getAttribute('html');
-        if (htmlAttr !== null) {
-            directiveHandlers.handleNueHtml(node, htmlAttr, scope);
+        const nForAttr = element.getAttribute('n-for');
+        if (nForAttr !== null) {
+            directiveHandlers.handleNFor(element, nForAttr, scope, compileNode, directiveHandlers, parentComponentName);
+            return;
         }
 
-        // 处理事件绑定 @event (原生 HTML 元素事件 或 组件内部元素事件)
-        const attrs = Array.from(node.attributes);
-        attrs.forEach(attr => {
-            if (attr.name.startsWith('@')) {
-                const eventName = attr.name.substring(1);
-                let handlerExpression = attr.value; // 例如 "incrementInternal" 或 "someMethod(arg)"
+        // 1.3 处理其他元素指令和属性 (在元素确定会渲染后处理)
+        const attributesToRemoveAfterProcessing = []; // 收集本轮要移除的属性
+        const attributes = Array.from(element.attributes); // 复制一份，因为后面会修改
 
-                // **修正点:** 检查表达式是否看起来像一个简单的函数名，如果是，则添加 ()
-                // 这是一个启发式方法，可能不完美，但能处理最常见情况
-                // 更健壮的方法需要更复杂的表达式解析
-                let executionCode = handlerExpression;
-                // 如果表达式是一个简单的标识符（可能带点号），并且不包含括号，则假定是方法调用
-                if (/^[a-zA-Z_][a-zA-Z0-9_.]*$/.test(handlerExpression.trim())) {
-                     executionCode = `${handlerExpression.trim()}()`; // 附加括号
-                     console.log(`[${parentComponentName}] 简单方法名检测，将执行: ${executionCode}`);
-                } else if (!handlerExpression.includes('(') && handlerExpression.includes('=')) {
-                    // 处理类似 @click="count = count + 1" 的情况，不需要加括号
-                    executionCode = handlerExpression;
-                } else if (!handlerExpression.includes('(')) {
-                    // 其他不含括号的简单表达式，可能也需要调用？或者就是属性访问？
-                    // 暂时保守处理，认为简单标识符才需要自动加括号
-                    // 如果需要更灵活，模板里就必须写完整的调用，如 @click="myVar = true" 或 @click="doCalc()"
-                     console.warn(`[${parentComponentName}] 事件处理器 "${handlerExpression}" 不含括号，将按原样执行。如果它是方法，请在模板中添加 ()`);
+        for (const attr of attributes) {
+            const attrName = attr.name;
+            const attrValue = attr.value;
+
+            // 1.3.1 属性绑定 (:attribute)
+            if (attrName.startsWith(':')) {
+                const actualAttrName = attrName.substring(1);
+                if (directiveHandlers.handleAttributeBinding) {
+                    directiveHandlers.handleAttributeBinding(element, actualAttrName, attrValue, scope, parentComponentName);
+                } else {
+                     console.warn(`[${parentComponentName}] 未找到 handleAttributeBinding 处理器`);
                 }
+                attributesToRemoveAfterProcessing.push(attrName);
+            }
+            // 1.3.2 事件绑定 (@event)
+            else if (attrName.startsWith('@')) {
+                const eventName = attrName.substring(1);
+                const handlerExpression = attrValue.trim(); // 去除前后空格
+                attributesToRemoveAfterProcessing.push(attrName);
 
-
-                node.addEventListener(eventName, (event) => {
-                    console.log(`[${parentComponentName}] 触发事件 ${eventName}，执行代码: ${executionCode}`);
+                element.addEventListener(eventName, (event) => {
+                    console.log(`[${parentComponentName}] 触发事件 ${eventName}，执行代码: ${handlerExpression}`);
                     try {
                         const context = Object.create(scope);
-                        context.event = event; // 将原生 event 对象放入上下文
+                        context.$event = event; // 将原生 event 对象放入上下文
 
-                        // 使用修正后的 executionCode
-                        const handlerExecutor = new Function('context', `with(context) { ${executionCode} }`);
-                        handlerExecutor.call(null, context);
+                        // ================== 修改后的事件处理逻辑 ==================
+                        const result = directiveHandlers.evaluateExpression(handlerExpression, context);
+
+                        // 检查表达式是否看起来像一个简单的函数名 (不含括号)
+                        // 并且 evaluateExpression 的结果确实是一个函数
+                        const isSimpleIdentifier = /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(handlerExpression);
+
+                        if (isSimpleIdentifier && typeof result === 'function') {
+                            console.log(`[${parentComponentName}] 检测到简单函数名 "${handlerExpression}"，将调用返回的函数。`);
+                            // 调用 evaluateExpression 返回的函数
+                            // 使用 call(scope) 确保函数内部的 this 指向组件作用域
+                            result.call(scope, event); // 将 event 作为参数传递
+                        } else {
+                            // 如果表达式本身包含括号，或者结果不是函数，
+                            // 那么 evaluateExpression 的执行本身就应该是预期的操作。
+                            console.log(`[${parentComponentName}] 表达式 "${handlerExpression}" 已由 evaluateExpression 执行。`);
+                        }
+                        // =======================================================
 
                     } catch (error) {
-                        console.error(`[${parentComponentName}] 执行事件处理器代码 "${executionCode}" (源: "${handlerExpression}") 出错:`, error);
+                        // evaluateExpression 内部会打印错误，这里可以捕获以防万一
+                        console.error(`[${parentComponentName}] 执行事件处理器代码 "${handlerExpression}" 时捕获到顶层错误:`, error);
                     }
                 });
             }
-        });
-
-        // 递归处理子节点
-        Array.from(node.childNodes).forEach(child => compileNode(child, scope, directiveHandlers, parentComponentName)); // 传递 parentComponentName
-
-    } else if (node.nodeType === Node.TEXT_NODE) {
-        // 处理文本插值 {{ expression }} (保持不变)
-        const text = node.textContent || '';
-        const regex = /\{\{([^}]+)\}\}/g;
-        if (!regex.test(text)) return;
-
-        const segments = [];
-        let match;
-        let lastIndex = 0;
-        regex.lastIndex = 0;
-
-        while ((match = regex.exec(text)) !== null) {
-            if (match.index > lastIndex) {
-                segments.push(document.createTextNode(text.substring(lastIndex, match.index)));
+            // 1.3.3 双向绑定 (n-model)
+            else if (attrName === 'n-model') {
+                 if (directiveHandlers.handleNModel) {
+                    directiveHandlers.handleNModel(element, attrValue, scope, parentComponentName);
+                 } else {
+                     console.warn(`[${parentComponentName}] 未找到 handleNModel 处理器`);
+                 }
+                 attributesToRemoveAfterProcessing.push(attrName);
             }
+            // 1.3.4 条件显示 (n-show)
+            else if (attrName === 'n-show') {
+                 if (directiveHandlers.handleNShow) {
+                    directiveHandlers.handleNShow(element, attrValue, scope, parentComponentName);
+                 } else {
+                     console.warn(`[${parentComponentName}] 未找到 handleNShow 处理器`);
+                 }
+                 attributesToRemoveAfterProcessing.push(attrName);
+            }
+            // 1.3.5 HTML 绑定 (n-html)
+            else if (attrName === 'n-html') {
+                 if (directiveHandlers.handleNHtml) {
+                    directiveHandlers.handleNHtml(element, attrValue, scope, parentComponentName);
+                 } else {
+                     console.warn(`[${parentComponentName}] 未找到 handleNHtml 处理器`);
+                 }
+                 attributesToRemoveAfterProcessing.push(attrName);
+            }
+        }
+
+        // 1.4 移除所有已处理的指令属性
+        attributesToRemoveAfterProcessing.forEach(attrName => element.removeAttribute(attrName));
+
+        // 1.5 递归处理子节点 (如果元素本身未被 n-if/n-for 移除)
+        // 使用 Array.from 创建副本，防止子节点在编译过程中被修改导致迭代问题
+        Array.from(element.childNodes).forEach(child => compileNode(child, scope, directiveHandlers, parentComponentName));
+
+    }
+    // 2. 处理文本节点 (Text Node) - 处理插值 {{ expression }}
+    else if (node.nodeType === Node.TEXT_NODE) {
+        const textContent = node.textContent || '';
+        const mustacheRegex = /\{\{([^}]+)\}\}/g; // 匹配 {{...}}
+
+        // 优化：如果文本节点不包含插值语法，直接跳过
+        if (!mustacheRegex.test(textContent)) {
+            return;
+        }
+
+        const segments = []; // 存储文本片段和响应式占位符
+        let lastIndex = 0;
+        let match;
+        mustacheRegex.lastIndex = 0; // 重置正则表达式的 lastIndex
+
+        while ((match = mustacheRegex.exec(textContent)) !== null) {
+            // 添加插值前的静态文本部分
+            if (match.index > lastIndex) {
+                segments.push(document.createTextNode(textContent.substring(lastIndex, match.index)));
+            }
+
+            // 处理插值表达式
             const expression = match[1].trim();
-            const placeholderNode = document.createTextNode(''); // 初始为空
+            const placeholderNode = document.createTextNode(''); // 创建一个空的文本节点作为占位符
             segments.push(placeholderNode);
 
+            // 使用 createEffect 来动态更新这个占位符节点的内容
             createEffect(() => {
                 try {
                     // 使用 directiveHandlers.evaluateExpression 统一处理表达式求值
                     const value = directiveHandlers.evaluateExpression(expression, scope);
+                    // 将计算结果转为字符串，处理 null/undefined 情况
                     placeholderNode.textContent = value === undefined || value === null ? '' : String(value);
                 } catch (error) {
                     console.error(`[${parentComponentName}] 计算表达式 "{{${expression}}}" 出错:`, error);
-                    placeholderNode.textContent = `{{Error}}`; // 简化错误显示
+                    placeholderNode.textContent = `{{表达式错误}}`; // 在页面上显示错误提示
                 }
             });
-            lastIndex = regex.lastIndex;
-        }
-        if (lastIndex < text.length) {
-            segments.push(document.createTextNode(text.substring(lastIndex)));
+
+            lastIndex = mustacheRegex.lastIndex; // 更新下次匹配的起始位置
         }
 
+        // 添加最后一个插值后的静态文本部分
+        if (lastIndex < textContent.length) {
+            segments.push(document.createTextNode(textContent.substring(lastIndex)));
+        }
+
+        // 如果有解析出片段，用这些片段替换原始文本节点
         if (segments.length > 0 && node.parentNode) {
-            segments.forEach(segment => node.parentNode.insertBefore(segment, node));
-            node.parentNode.removeChild(node);
+            const parent = node.parentNode;
+            segments.forEach(segment => parent.insertBefore(segment, node));
+            parent.removeChild(node); // 移除原始的包含 {{...}} 的文本节点
         }
     }
+    // 3. 其他节点类型 (如注释 Comment Node) - 通常直接忽略
 }
+
+
 
 /**
  * 将 CSS 样式注入到文档头部
@@ -399,9 +460,10 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = 'Root
  */
 function injectStyles(css, componentUrl) {
     if (!css || !css.trim()) return;
-    const styleId = `nue-style-${componentUrl.replace(/[^a-zA-Z0-9]/g, '-')}`; // 基于 URL 生成 ID
+    // 基于 URL 生成一个相对稳定的 ID，移除特殊字符
+    const styleId = `nono-style-${componentUrl.replace(/[^a-zA-Z0-9_-]/g, '-')}`;
     if (document.getElementById(styleId)) {
-        console.log(`样式 ${styleId} 已存在，跳过注入。`);
+        // console.log(`样式 ${styleId} 已存在，跳过注入。`);
         return; // 防止重复注入
     }
     console.log(`注入样式 ${styleId}...`);
@@ -413,22 +475,24 @@ function injectStyles(css, componentUrl) {
 }
 
 /**
+ * 挂载组件到目标位置
  * @param {string} componentUrl .nue 文件的 URL
  * @param {string | Element | Comment} target - CSS 选择器、目标元素或占位符注释节点
  * @param {object} [initialProps={}] - 传递给组件的 Props
  * @param {object} [eventHandlers={}] - 父组件提供的事件处理器
- * @param {string} [componentName='Component'] - 组件名称，用于日志
+ * @param {string} [componentName='组件'] - 组件名称，用于日志
  * @returns {Promise<Element | null>} 返回挂载的组件根元素 (第一个 Element 节点)，如果失败则返回 null
  */
-async function mountComponent(componentUrl, target, initialProps = {}, eventHandlers = {}, componentName = 'Component') {
-    console.log(`[Core] 开始挂载组件: ${componentName} (${componentUrl})`);
+async function mountComponent(componentUrl, target, initialProps = {}, eventHandlers = {}, componentName = '组件') {
+    console.log(`[核心] 开始挂载组件: ${componentName} (${componentUrl})`);
     let targetElement = null; // 挂载的目标 DOM 节点
-    let isPlaceholder = false; // 标记 target 是否是占位符
+    let isPlaceholder = false; // 标记 target 是否是占位符注释
 
+    // 1. 解析挂载目标
     if (typeof target === 'string') {
         targetElement = document.querySelector(target);
         if (!targetElement) {
-            console.error(`[Core] 挂载失败：找不到目标元素 "${target}"`);
+            console.error(`[核心] 挂载失败：找不到目标元素 "${target}"`);
             return null;
         }
     } else if (target instanceof Element) {
@@ -436,168 +500,145 @@ async function mountComponent(componentUrl, target, initialProps = {}, eventHand
     } else if (target instanceof Comment) { // 支持挂载到注释占位符
         targetElement = target;
         isPlaceholder = true;
+        if (!targetElement.parentNode) {
+             console.error(`[核心] 挂载失败：注释占位符已脱离 DOM`);
+             return null;
+        }
     } else {
-         console.error(`[Core] 挂载失败：无效的目标`, target);
+         console.error(`[核心] 挂载失败：无效的目标`, target);
          return null;
     }
 
-    // 检查指令处理器
-    if (typeof window.NueDirectives === 'undefined' || typeof window.NueDirectives.evaluateExpression !== 'function') {
-         console.error("[Core] 指令处理器 (directives.js) 或其 evaluateExpression 未加载！");
-         if (targetElement && !isPlaceholder) targetElement.innerHTML = `<p style="color: red;">错误：directives.js 未加载</p>`;
-         return null;
-    }
-     // 检查 Acorn
+    // 2. 检查依赖 (Acorn, 指令处理器)
     if (typeof window.acorn === 'undefined') {
-        console.error("[Core] Acorn 解析器 (acorn.js) 未加载！");
+        console.error("[核心] Acorn 解析器 (acorn.js) 未加载！");
         if (targetElement && !isPlaceholder) targetElement.innerHTML = `<p style="color: red;">错误：acorn.js 未加载</p>`;
+        else if (isPlaceholder) targetElement.parentNode?.insertBefore(document.createTextNode(' [Acorn 加载错误] '), targetElement.nextSibling);
         return null;
+    }
+     if (typeof window.NueDirectives === 'undefined' || typeof window.NueDirectives.evaluateExpression !== 'function') {
+         console.error("[核心] 指令处理器 (nono-directives.js) 或其 evaluateExpression 未加载！");
+         if (targetElement && !isPlaceholder) targetElement.innerHTML = `<p style="color: red;">错误：nono-directives.js 未加载</p>`;
+         else if (isPlaceholder) targetElement.parentNode?.insertBefore(document.createTextNode(' [Directives 加载错误] '), targetElement.nextSibling);
+         return null;
     }
 
 
     try {
-        // 1. 加载组件文件 (使用缓存)
+        // 3. 加载组件文件 (使用缓存)
         let componentText;
         let cacheEntry = componentCache.get(componentUrl);
         if (cacheEntry && cacheEntry.text) {
             componentText = cacheEntry.text;
-            console.log(`[Core] 从缓存加载 ${componentUrl}`);
+            console.log(`[核心] 从缓存加载 ${componentUrl}`);
         } else {
-            console.log(`[Core] 正在加载 ${componentUrl}...`);
+            console.log(`[核心] 正在加载 ${componentUrl}...`);
             const response = await fetch(componentUrl);
             if (!response.ok) throw new Error(`加载组件失败: ${response.status} ${response.statusText}`);
             componentText = await response.text();
-            cacheEntry = componentCache.get(componentText) || {};
-            cacheEntry.text = componentText;
+            // 使用 componentUrl 作为主键缓存文本和后续解析结果
+            cacheEntry = { text: componentText };
             componentCache.set(componentUrl, cacheEntry);
-            componentCache.set(componentText, cacheEntry);
-            console.log("[Core] 组件加载完成.");
+            console.log("[核心] 组件加载完成.");
         }
 
-        // 2. 解析组件结构 (使用缓存)
-        const { template, script, style } = parseComponentStructure(componentText);
-
-        // 3. 解析脚本 AST (使用缓存)
-        let ast;
-        if (cacheEntry.ast) {
-            ast = cacheEntry.ast;
-            // console.log("[Core] 从缓存获取脚本 AST");
-        } else {
-            ast = parseScriptWithAcorn(script);
-            cacheEntry.ast = ast;
+        // 4. 解析组件结构 (使用缓存)
+        if (!cacheEntry.structure) {
+            cacheEntry.structure = parseComponentStructure(componentText);
         }
+        const { template, script, style } = cacheEntry.structure;
 
-        // **新增:** 4. 创建 emit 函数
+        // 5. 解析脚本 AST (使用缓存)
+        if (!cacheEntry.ast && script.trim()) { // 只有在有脚本时才解析
+            cacheEntry.ast = parseScriptWithAcorn(script);
+        }
+        const ast = cacheEntry.ast; // 可能为 null
+
+        // 6. 创建 emit 函数
         const emit = createEmitFunction(eventHandlers, componentName);
 
-        // **修改:** 5. 执行脚本获取作用域 (注入 props 和 emit)
+        // 7. 执行脚本获取作用域 (注入 props 和 emit)
         const componentScope = executeScript(script, ast, initialProps, emit);
 
-        // 6. 编译模板
-        console.log(`[Core] 开始编译 ${componentName} 的模板...`);
+        // 8. 编译模板
+        console.log(`[核心] 开始编译 ${componentName} 的模板...`);
         const fragment = document.createDocumentFragment();
-        const tempDiv = document.createElement('div'); // 临时容器
+        const tempDiv = document.createElement('div'); // 临时容器解析 HTML
         tempDiv.innerHTML = template.trim();
         // 将临时容器的子节点移动到 fragment
         while (tempDiv.firstChild) {
             fragment.appendChild(tempDiv.firstChild);
         }
 
-        // 对 fragment 的顶级节点进行编译，传入组件名
+        // 对 fragment 的顶级节点进行编译，传入组件名和指令处理器
         Array.from(fragment.childNodes).forEach(node => compileNode(node, componentScope, window.NueDirectives, componentName));
-        console.log(`[Core] ${componentName} 模板编译完成.`);
+        console.log(`[核心] ${componentName} 模板编译完成.`);
 
-        // 7. 注入样式 (使用缓存检查)
+        // 9. 注入样式 (内部会检查是否已注入)
         injectStyles(style, componentUrl);
 
-        // 8. 挂载到目标
+        // 10. 挂载到目标
         let mountedRootElement = null;
         // 查找编译后 fragment 中的第一个元素节点作为挂载的根
-        mountedRootElement = fragment.querySelector('*'); // 或者 fragment.firstElementChild
-
-        if (!mountedRootElement && fragment.childNodes.length > 0) {
-             // 如果没有元素节点，但有其他节点（如文本节点），可能需要包裹一下
-             // 或者，约定组件必须有一个根元素节点
-             console.warn(`[Core] 组件 ${componentName} 编译后没有找到根元素节点，将尝试挂载整个 fragment 内容。`);
-             // 在这种情况下，返回 fragment 可能更合适，但替换占位符会复杂些
-             // 简单处理：取第一个子节点（可能是文本或注释）
-             mountedRootElement = fragment.firstChild;
-        }
-
+        // fragment.firstElementChild 在没有元素子节点时为 null
+        mountedRootElement = fragment.querySelector('*') || fragment.firstChild; // 回退到第一个子节点（可能是文本）
 
         if (isPlaceholder) {
             // 如果是挂载到占位符，用 fragment 内容替换占位符
-            // targetElement 是注释节点
-            if (targetElement.parentNode) {
-                 // 插入 fragment 的所有子节点
-                 let currentNode = fragment.firstChild;
-                 while(currentNode) {
-                     const nextNode = currentNode.nextSibling;
-                     targetElement.parentNode.insertBefore(currentNode, targetElement);
-                     currentNode = nextNode;
+            const parent = targetElement.parentNode; // 在插入前获取父节点
+            if (parent) {
+                 // 插入 fragment 的所有子节点到占位符之前
+                 parent.insertBefore(fragment, targetElement);
+                 // 找到实际插入的第一个元素节点（如果存在）
+                 let firstInsertedNode = targetElement.previousSibling;
+                 while(firstInsertedNode && firstInsertedNode.nodeType !== Node.ELEMENT_NODE) {
+                     firstInsertedNode = firstInsertedNode.previousSibling;
                  }
-                 // 理论上，此时 mountedRootElement 应该是插入的第一个非文本节点
-                 // 重新查找第一个元素可能更可靠
-                 mountedRootElement = targetElement.previousSibling;
-                 while(mountedRootElement && mountedRootElement.nodeType !== Node.ELEMENT_NODE) {
-                     mountedRootElement = mountedRootElement.previousSibling;
-                 }
-                 // 如果找不到元素，可能组件模板为空或只有文本
-                 if (!mountedRootElement) mountedRootElement = targetElement.previousSibling; // 回退到第一个节点
-
-                 // targetElement.parentNode.replaceChild(fragment, targetElement); // replaceChild 不适用于 DocumentFragment
-                 // 移除占位符现在由调用者 (compileNode) 完成，因为它需要替换操作
-                 console.log(`[Core] 组件 ${componentName} 内容已插入占位符位置。`);
+                 mountedRootElement = firstInsertedNode; // 可能为 null
+                 // 移除占位符注释节点
+                 parent.removeChild(targetElement);
+                 console.log(`[核心] 组件 ${componentName} 内容已替换占位符。`);
             } else {
-                 console.error(`[Core] 占位符 ${componentName} 已从 DOM 移除，无法挂载。`);
+                 // 这理论上不应该发生，因为前面检查过 parentNode
+                 console.error(`[核心] 占位符 ${componentName} 的父节点丢失，无法挂载。`);
                  return null; // 无法挂载
             }
         } else {
             // 如果是挂载到元素，清空并附加
             targetElement.innerHTML = '';
             targetElement.appendChild(fragment);
-            console.log(`[Core] 组件 ${componentName} 成功挂载到`, targetElement);
+            // 挂载后，第一个元素子节点就是根元素
+            mountedRootElement = targetElement.firstElementChild;
+            console.log(`[核心] 组件 ${componentName} 成功挂载到`, targetElement);
         }
 
-        console.log(`[Core] ${componentName} (${componentUrl}) 挂载流程结束.`);
-        // 返回实际挂载的第一个元素节点，供 compileNode 替换占位符使用
-        // 注意：如果组件模板有多个根节点，这里只返回第一个元素
-        return mountedRootElement instanceof Element ? mountedRootElement : null;
-
+        console.log(`[核心] ${componentName} (${componentUrl}) 挂载流程结束.`);
+        // 返回实际挂载的第一个元素节点（或第一个节点），供子组件逻辑使用
+        return mountedRootElement instanceof Element ? mountedRootElement : null; // 确保返回的是 Element 或 null
 
     } catch (error) {
-        console.error(`[Core] 挂载组件 ${componentName} (${componentUrl}) 时发生错误:`, error);
+        console.error(`[核心] 挂载组件 ${componentName} (${componentUrl}) 时发生错误:`, error);
+        const errorMsg = `加载/编译组件 ${componentName} 失败: ${error.message}`;
         if (targetElement && !isPlaceholder) {
-             targetElement.innerHTML = `<pre style="color: red;">加载或编译组件 ${componentName} 失败:\n${error.message}\n${error.stack || ''}</pre>`;
+             targetElement.innerHTML = `<pre style="color: red;">${errorMsg}\n${error.stack || ''}</pre>`;
         } else if (isPlaceholder && targetElement.parentNode) {
             // 在占位符后插入错误信息
             const errorNode = document.createElement('div');
-            errorNode.style.color = 'red';
-            errorNode.textContent = `Error loading/mounting <${componentName}>: ${error.message}`;
+            errorNode.style.color = 'red'; errorNode.textContent = errorMsg;
             targetElement.parentNode.insertBefore(errorNode, targetElement.nextSibling);
         }
         return null; // 返回 null 表示失败
     }
 }
 
-// 暴露核心 API
+// 暴露核心 API 到全局
 window.NueCore = {
     mountComponent,
-    createSignal, // 暴露给 directives.js 或外部使用
-    createEffect,  // 暴露给 directives.js 或外部使用
-    compileNode,    // 暴露给 directives.js 用于递归编译
-    // **新增:** 暴露 evaluateExpression 给 directives.js 使用
-    // evaluateExpression: (expression, scope, additionalArgs = {}) => {
-    //     // 这里的实现需要和 directives.js 中的一致或调用它
-    //     // 为了避免重复，让 directives.js 定义它，core.js 在需要时调用 window.NueDirectives.evaluateExpression
-    //     if (window.NueDirectives && typeof window.NueDirectives.evaluateExpression === 'function') {
-    //         return window.NueDirectives.evaluateExpression(expression, scope, additionalArgs);
-    //     } else {
-    //         console.error("evaluateExpression 未在 NueDirectives 中定义！");
-    //         throw new Error("evaluateExpression is not available");
-    //     }
-    // }
+    createSignal, // 暴露给组件脚本和指令
+    createEffect,  // 暴露给指令等
+    compileNode,    // 暴露给指令（如 n-if, n-for）进行递归编译
+    // 注意：evaluateExpression 由 nono-directives.js 提供并挂载到 NueDirectives 上
 };
 
-console.log("core.js 加载完成，NueCore 对象已准备就绪。");
+console.log("nono-core.js 加载完成，NueCore 对象已准备就绪。");
 

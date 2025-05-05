@@ -1,103 +1,226 @@
 <template>
-    <h2>Nue 组件 Demo (带指令和子组件)</h2>
+    <h2>Nono 组件 Demo (完整指令集)</h2>
 
-    <!-- 基本计数器 (父组件状态) -->
+    <!-- ======================================== -->
+    <!-- 1. 基本计数器 (父组件状态) -->
+    <!-- ======================================== -->
     <div class="container">
         <h3>父组件计数器</h3>
         <p>
             父组件计数值: <strong>{{ count() }}</strong>
         </p>
+        <!-- 事件绑定: @click -->
         <button @click="count(count() + 1)">父组件 加 1</button>
         <button @click="add2ToCount()">父组件 加 2 (方法)</button>
     </div>
 
-    <!-- 父组件消息 (用于传递给子组件) -->
+    <!-- ======================================== -->
+    <!-- 2. 属性绑定 (:attribute) 示例 -->
+    <!-- ======================================== -->
     <div class="container">
-        <h3>父组件消息</h3>
-        <p>要传递给子组件的消息: {{ message() }}</p>
-        <button @click="changeMessage()">改变父组件消息 (会更新子组件)</button>
+        <h3>属性绑定 (:attribute) 示例</h3>
+        <!-- :class 绑定 (对象语法) -->
+        <p :class="{ highlight: isHighlighted(), 'text-large': true }">
+            这段文字根据 isHighlighted() 状态动态添加 'highlight' 类。 (对象语法)
+        </p>
+        <!-- :class 绑定 (字符串表达式) -->
+        <p :class="isHighlighted() ? 'highlight-alt' : 'normal-text'">
+            这段文字根据 isHighlighted() 状态切换 'highlight-alt' 或 'normal-text' 类。 (三元表达式)
+        </p>
+        <!-- :style 绑定 (对象语法) -->
+        <p :style="{ color: textColor(), fontSize: count() + 14 + 'px' }">
+            这段文字的颜色 (textColor) 和字号 (基于 count) 是动态绑定的。
+        </p>
+        <!-- :disabled 绑定 -->
+        <button :disabled="isButtonDisabled()">
+            这个按钮的 disabled 状态由 isButtonDisabled() 控制
+        </button>
+        <!-- :src 和 :alt 绑定 -->
+        <div>
+            <img :src="imageUrl()" :alt="imageAltText()" width="100">
+            <p>图片来源 (imageUrl): {{ imageUrl() }}</p>
+        </div>
+        <!-- 绑定自定义 data-* 属性 -->
+        <div :data-count="count()">
+            这个 div 有一个动态的 data-count 属性: {{ count() }}
+        </div>
+        <button @click="toggleHighlight()">切换高亮</button>
+        <button @click="changeTextColor()">改变文字颜色</button>
+        <button @click="toggleDisable()">切换按钮禁用</button>
+        <button @click="changeImage()">切换图片</button>
     </div>
 
-    <!-- 使用子组件 -->
+    <!-- ======================================== -->
+    <!-- 3. 双向绑定 (n-model) 示例 -->
+    <!-- ======================================== -->
+    <div class="container">
+        <h3>双向绑定 (n-model) 示例</h3>
+        <!-- input[type=text] -->
+        <div>
+            <label for="text-input">文本输入: </label>
+            <input type="text" id="text-input" n-model="textInput">
+            <p>输入的值: {{ textInput() }}</p>
+        </div>
+        <!-- input[type=checkbox] -->
+        <div>
+            <input type="checkbox" id="checkbox-input" n-model="isChecked">
+            <label for="checkbox-input">是否选中: {{ isChecked() }}</label>
+        </div>
+        <!-- input[type=radio] -->
+        <div>
+            <p>单选按钮选择: {{ radioValue() }}</p>
+            <input type="radio" id="radio-one" value="选项一" n-model="radioValue">
+            <label for="radio-one">选项一</label>
+            <br>
+            <input type="radio" id="radio-two" value="选项二" n-model="radioValue">
+            <label for="radio-two">选项二</label>
+        </div>
+        <!-- textarea -->
+        <div>
+            <label for="textarea-input">文本域:</label><br>
+            <textarea id="textarea-input" n-model="textAreaContent" rows="3" cols="30"></textarea>
+            <p>文本域内容预览:</p>
+            <pre>{{ textAreaContent() }}</pre>
+        </div>
+        <!-- select (单选) -->
+        <div>
+            <label for="select-input">下拉选择:</label>
+            <select id="select-input" n-model="selectedValue">
+                <option value="">请选择</option>
+                <option value="A">选项 A</option>
+                <option value="B">选项 B</option>
+                <option value="C">选项 C</option>
+            </select>
+            <p>选中的值: {{ selectedValue() }}</p>
+        </div>
+    </div>
+
+    <!-- ======================================== -->
+    <!-- 4. 条件渲染 (n-if) 与 条件显示 (n-show) -->
+    <!-- ======================================== -->
+    <div class="container">
+        <h3>条件渲染 (n-if) 与 条件显示 (n-show)</h3>
+        <button @click="showElement(!showElement())">
+            切换显示状态 (当前: {{ showElement() }})
+        </button>
+
+        <!-- n-if: 元素在 DOM 中添加或移除 -->
+        <h4>n-if 示例</h4>
+        <div n-if="showElement()">
+            <p>这个 div 使用 <strong>n-if="showElement()"</strong> 控制。</p>
+            <p>当条件为 false 时，它会从 DOM 中移除。</p>
+            <p>内部计数器: {{ count() }}</p> <!-- 验证内部绑定是否正常 -->
+        </div>
+        <p n-if="!showElement()">n-if 的内容已隐藏 (DOM 中不存在)。</p>
+
+        <!-- n-show: 元素始终在 DOM 中，通过 display:none 隐藏 -->
+        <h4>n-show 示例</h4>
+        <div n-show="showElement()" class="show-box">
+            <p>这个 div 使用 <strong>n-show="showElement()"</strong> 控制。</p>
+            <p>当条件为 false 时，它会设置 style="display: none;"，但仍在 DOM 中。</p>
+            <p>内部计数器: {{ count() }}</p> <!-- 验证内部绑定是否正常 -->
+        </div>
+        <!-- 注意：n-show 没有对应的 "else" 块，因为元素始终存在 -->
+        <p>n-show 的元素始终在 DOM 树中，检查元素面板可以看到。</p>
+    </div>
+
+
+    <!-- ======================================== -->
+    <!-- 5. 列表渲染 (n-for) 示例 -->
+    <!-- ======================================== -->
+    <div class="container">
+        <h3>列表渲染 (n-for) 示例</h3>
+        <button @click="addItem()">添加列表项</button>
+        <button @click="shuffleItems()">打乱列表项</button>
+        <ul>
+            <!-- *** 修改: 使用 item() 和 index() 访问 Signal 的值 *** -->
+            <li n-for="(item, index) in items()" :key="item().id"> <!-- :key 仍推荐，但现在访问 item().id -->
+                <!-- *** 修改: {{ index() }} *** -->
+                索引 {{ index() }}:
+                <!-- *** 修改: {{ item().name }} *** -->
+                {{ item().name }}
+                <!-- *** 修改: (ID: {{ item().id }}) *** -->
+                (ID: {{ item().id }})
+                <!-- *** 修改: @click="removeItem(item().id)" *** -->
+                <button @click="removeItem(item().id)">移除</button>
+                <!-- *** 修改: :style="{ color: item().id % 2 === 0 ? 'blue' : 'green' }" *** -->
+                <span :style="{ color: item().id % 2 === 0 ? 'blue' : 'green' }"> (样式绑定)</span>
+            </li>
+        </ul>
+        <p n-if="items().length === 0">列表为空。</p>
+    </div>
+
+    <!-- ======================================== -->
+    <!-- 6. HTML 内容绑定 (n-html) 示例 -->
+    <!-- ======================================== -->
+    <div class="container">
+        <h3>HTML 内容绑定 (n-html) 示例</h3>
+        <p>下面的内容由 n-html 渲染 (注意 XSS 风险):</p>
+        <div class="html-container" n-html="rawHtmlContent()"></div>
+        <button @click="changeHtmlContent()">改变 HTML 内容</button>
+    </div>
+
+
+    <!-- ======================================== -->
+    <!-- 7. 子组件示例 (保持不变，但验证 props 和事件是否仍工作) -->
+    <!-- ======================================== -->
     <div class="container">
         <h3>子组件示例</h3>
+        <p>要传递给子组件的消息 (动态 Prop): {{ message() }}</p>
+        <button @click="changeMessage()">改变父组件消息 (会更新子组件)</button>
         <p>下面是子组件的内容:</p>
         <!--
-            使用子组件标签 <child-component>
-            :message="message()" - 动态绑定父组件的 message Signal 给子组件的 message prop
-            static-message="这是来自父组件的静态问候" - 传递静态字符串给子组件的 staticMessage prop
-            @child-notified="handleChildEvent($event)" - 监听子组件发出的 'child-notified' 事件，
-                                                      并用父组件的 handleChildEvent 方法处理。
-                                                      $event 会是子组件 emit 时的 payload。
+            :message="message()" - 动态绑定父组件的 message Signal
+            static-message="..." - 静态 Prop
+            @child-notified="..." - 监听子组件事件
         -->
         <child-component
             :message="message()"
             static-message="这是来自父组件的静态问候"
             @child-notified="handleChildEvent($event)"
         ></child-component>
-
         <p>来自子组件的最新消息: <strong>{{ childNotification() }}</strong></p>
-    </div>
-
-
-    <!-- if 示例 (父组件) -->
-    <div class="container">
-        <h3>if 指令 (父组件)</h3>
-        <button @click="showDetails(!showDetails())">
-            {{ showDetails() ? '隐藏' : '显示' }} 父组件详情
-        </button>
-        <div if="showDetails()">
-            <p>父组件的详细信息。</p>
-            <p>父组件计数值: {{ count() }}</p>
-            <!-- 可以在 if 块内使用子组件 -->
-             <child-component
-                :message="'消息 from if 块: ' + count()"
-                static-message="静态消息 from if"
-                @child-notified="handleChildEvent($event)"
-             ></child-component>
-        </div>
-        <p if="!showDetails()">父组件详情已隐藏。</p>
-    </div>
-
-    <!-- for 示例 (父组件) -->
-    <div class="container">
-        <h3>for 指令 (父组件)</h3>
-        <ul>
-            <li for="(item, index) in items()">
-                父列表项 {{ index }}: {{ item.name }}
-                <!-- 可以在 for 循环内使用子组件 -->
-                <child-component
-                    :message="`消息 for ${item.name}`"
-                    :static-message="`静态 for ${item.id}`"
-                    @child-notified="handleChildEvent({ ...$event, sourceItem: item.name })"
-                ></child-component>
-            </li>
-        </ul>
-        <button @click="addItem()">添加父列表项</button>
     </div>
 
 </template>
 
 <script>
-    // --- 父组件响应式状态 ---
+    // --- 1. 基础状态 ---
     const count = createSignal(0);
-    const showDetails = createSignal(false);
+    const message = createSignal('这是 <strong>默认</strong> 父消息.');
+    const childNotification = createSignal('等待子组件消息...');
+
+    // --- 2. 属性绑定状态 ---
+    const isHighlighted = createSignal(false);
+    const textColor = createSignal('blue');
+    const isButtonDisabled = createSignal(false);
+    const imageUrl = createSignal('https://via.placeholder.com/100/0000FF/FFFFFF?text=Image+1');
+    const imageAltText = createSignal('占位图 1');
+
+    // --- 3. 双向绑定状态 ---
+    const textInput = createSignal('初始文本');
+    const isChecked = createSignal(true);
+    const radioValue = createSignal('选项一'); // 初始选中的 radio 的 value
+    const textAreaContent = createSignal('这是文本域的\n初始内容。');
+    const selectedValue = createSignal('B'); // 初始选中的 option 的 value
+
+    // --- 4. 条件渲染/显示状态 ---
+    const showElement = createSignal(true);
+
+    // --- 5. 列表渲染状态 ---
     const items = createSignal([
         { id: 1, name: '苹果' },
-        { id: 2, name: '香蕉' }
+        { id: 2, name: '香蕉' },
+        { id: 3, name: '橙子' }
     ]);
-    const message = createSignal('这是 <strong>默认</strong> 父消息.');
-    const childNotification = createSignal('等待子组件消息...'); // 用于显示子组件发来的消息
+    let nextItemId = 4; // 用于生成新 ID
+
+    // --- 6. HTML 绑定状态 ---
+    const rawHtmlContent = createSignal('<p style="color:purple;">这是<em>原始</em>HTML内容。</p>');
 
     // --- 父组件方法 ---
     const add2ToCount = function() {
         count(count() + 2);
-    };
-
-    const addItem = function() {
-        const currentItems = items();
-        const newItemId = currentItems.length > 0 ? Math.max(...currentItems.map(i => i.id)) + 1 : 1;
-        items([...currentItems, { id: newItemId, name: `新水果 ${newItemId}` }]);
     };
 
     const changeMessage = function() {
@@ -105,83 +228,276 @@
         message(`<i>父消息更新于 ${new Date().toLocaleTimeString()}</i>: 随机数 <b>${randomNum}</b>`);
     };
 
-    // **新增:** 处理子组件事件的方法
-    // 参数 payload 就是子组件 emit 时传递的第二个参数 ($event)
+    // 方法 for 属性绑定示例
+    const toggleHighlight = () => isHighlighted(!isHighlighted());
+    const changeTextColor = () => textColor(textColor() === 'blue' ? 'red' : 'blue');
+    const toggleDisable = () => isButtonDisabled(!isButtonDisabled());
+    const changeImage = () => {
+        if (imageUrl().includes('Image+1')) {
+            imageUrl('https://via.placeholder.com/100/FF0000/FFFFFF?text=Image+2');
+            imageAltText('占位图 2');
+        } else {
+            imageUrl('https://via.placeholder.com/100/0000FF/FFFFFF?text=Image+1');
+            imageAltText('占位图 1');
+        }
+    };
+
+    // 方法 for 列表渲染示例
+    const addItem = function() {
+        const currentItems = items();
+        items([...currentItems, { id: nextItemId++, name: `新水果 ${nextItemId - 1}` }]);
+    };
+    const removeItem = function(idToRemove) {
+        items(items().filter(item => item.id !== idToRemove));
+    };
+    const shuffleItems = function() {
+        // 简单打乱数组
+        items([...items()].sort(() => Math.random() - 0.5));
+    };
+
+     // 方法 for HTML 绑定示例
+    const changeHtmlContent = function() {
+        const time = new Date().toLocaleTimeString();
+        rawHtmlContent(`<h4 style="color:teal;">内容已更新 @ ${time}</h4><ul><li>列表项 1</li><li>列表项 2</li></ul>`);
+    };
+
+    // 处理子组件事件的方法 (保持不变)
     const handleChildEvent = function(payload) {
         console.log("父组件 demo.nue 收到子组件事件 'child-notified':", payload);
-        // 更新父组件的状态以显示收到的消息
         let notificationText = `收到: "${payload.message}" (来自 ${payload.sourceItem || '未知项'}) at ${new Date(payload.timestamp).toLocaleTimeString()}`;
         if (payload.internalValue !== undefined) {
             notificationText += ` | 子组件内部值: ${payload.internalValue}`;
         }
         childNotification(notificationText);
-
-        // 父组件也可以根据子组件事件做其他事情，比如修改自己的状态
-        // count(count() + 10); // 例如：每次收到子组件消息，父组件计数器加 10
     };
 
-    // **修改:** 显式返回需要暴露给模板的作用域对象
-    // 包括新增的 childNotification 和 handleChildEvent
+    // **重要:** 暴露所有需要给模板使用的状态和方法
     return {
+        // 基础
         count,
-        showDetails,
-        items,
         message,
-        childNotification, // 新增
+        childNotification,
         add2ToCount,
-        addItem,
-        // removeItem, // 如果不用可以注释掉
-        // shuffleItems, // 如果不用可以注释掉
         changeMessage,
-        handleChildEvent // 新增
+        handleChildEvent,
+        // 属性绑定
+        isHighlighted,
+        textColor,
+        isButtonDisabled,
+        imageUrl,
+        imageAltText,
+        toggleHighlight,
+        changeTextColor,
+        toggleDisable,
+        changeImage,
+        // 双向绑定
+        textInput,
+        isChecked,
+        radioValue,
+        textAreaContent,
+        selectedValue,
+        // 条件渲染/显示
+        showElement,
+        // 列表渲染
+        items,
+        addItem,
+        removeItem,
+        shuffleItems,
+        // HTML 绑定
+        rawHtmlContent,
+        changeHtmlContent
     };
 </script>
 
 
 <style>
-/* 父组件样式 (保持不变) */
+/* 基础样式 (保持不变) */
 body {
     font-family: sans-serif;
     padding: 20px;
     font-size: 1.1em;
     line-height: 1.6;
+    background-color: #f0f2f5; /* 淡灰色背景 */
 }
 .container {
-    border: 1px solid #ccc;
-    padding: 15px;
-    margin-bottom: 20px;
-    border-radius: 5px;
-    background-color: #f9f9f9;
+    border: 1px solid #d9d9d9; /* 浅灰色边框 */
+    padding: 20px;
+    margin-bottom: 25px;
+    border-radius: 8px; /* 更圆润的边角 */
+    background-color: #ffffff; /* 白色背景 */
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1); /* 添加细微阴影 */
 }
 h2, h3 {
     margin-top: 0;
+    color: #333; /* 深灰色标题 */
+    border-bottom: 1px solid #eee; /* 标题下划线 */
+    padding-bottom: 10px;
+    margin-bottom: 15px;
+}
+h4 {
+    margin-top: 15px;
+    margin-bottom: 10px;
+    color: #555;
 }
 button {
-    padding: 8px 12px;
-    margin-right: 8px;
+    padding: 8px 15px; /* 增加内边距 */
+    margin-right: 10px;
     margin-top: 5px;
+    margin-bottom: 5px; /* 增加底部外边距 */
     cursor: pointer;
+    background-color: #1890ff; /* 蓝色主按钮 */
+    color: white;
+    border: none;
+    border-radius: 4px;
+    font-size: 0.95em;
+    transition: background-color 0.3s ease; /* 添加过渡效果 */
+}
+button:hover {
+    background-color: #40a9ff; /* 悬停时变浅蓝 */
+}
+button:disabled {
+    background-color: #f5f5f5; /* 禁用时灰色 */
+    color: #bfbfbf;
+    cursor: not-allowed;
+}
+button:disabled:hover {
+    background-color: #f5f5f5; /* 禁用时悬停不变 */
+}
+/* 特定按钮样式 */
+button.secondary {
     background-color: #e7e7e7;
+    color: #333;
     border: 1px solid #ccc;
 }
+button.secondary:hover {
+     background-color: #dcdcdc;
+}
+
 ul {
     padding-left: 20px;
+    list-style-type: disc; /* 使用实心圆点 */
 }
 li {
-    margin-bottom: 10px; /* 增加一点间距 */
-    border-bottom: 1px dotted #eee;
-    padding-bottom: 10px;
+    margin-bottom: 12px; /* 列表项间距 */
+    padding-bottom: 8px;
+    border-bottom: 1px dotted #eee; /* 分隔线 */
 }
+li:last-child {
+    border-bottom: none; /* 最后一项无分隔线 */
+}
+li button { /* 列表项内按钮样式调整 */
+    padding: 3px 8px;
+    font-size: 0.85em;
+    margin-left: 10px;
+    background-color: #ff4d4f; /* 红色移除按钮 */
+}
+li button:hover {
+    background-color: #ff7875;
+}
+
 strong {
-    color: #d9534f; /* 红色 */
+    color: #fa541c; /* 橙红色强调 */
 }
 em {
-    color: blue; /* 蓝色 */
+    color: #1890ff; /* 蓝色斜体 */
 }
-/* html 示例的样式 (如果还用的话) */
-.container div[html] {
-    border: 1px dashed blue;
+pre {
+    background-color: #f7f7f7;
+    border: 1px solid #e8e8e8;
     padding: 10px;
-    margin-top: 10px;
+    border-radius: 4px;
+    white-space: pre-wrap; /* 自动换行 */
+    word-wrap: break-word;
 }
+code {
+    background-color: #f0f0f0;
+    padding: 2px 4px;
+    border-radius: 3px;
+    font-family: monospace;
+}
+
+/* :class 示例样式 */
+.highlight {
+    background-color: #fffbe6; /* 淡黄色高亮 */
+    border-left: 4px solid #ffe58f; /* 黄色左边框 */
+    padding: 5px 10px;
+    font-weight: bold;
+}
+.highlight-alt {
+    color: #c41d7f; /* 紫红色 */
+    font-style: italic;
+}
+.normal-text {
+    color: #595959; /* 正常文本颜色 */
+}
+.text-large {
+    font-size: 1.2em; /* 稍大字体 */
+}
+
+/* n-html 容器样式 */
+.html-container {
+    border: 1px dashed #1890ff; /* 蓝色虚线边框 */
+    padding: 15px;
+    margin-top: 10px;
+    background-color: #e6f7ff; /* 淡蓝色背景 */
+}
+
+/* n-show 容器样式 (用于演示它在 DOM 中) */
+.show-box {
+    border: 2px solid green;
+    padding: 10px;
+    background-color: #f6ffed; /* 淡绿色背景 */
+    transition: opacity 0.5s ease; /* 添加淡入淡出效果 (虽然 display 不支持 transition) */
+}
+/* 当 n-show=false 时，display: none 会覆盖这个，但如果用 visibility 可以看到效果 */
+/* [style*="display: none"] { opacity: 0; } */
+
+
+/* 表单元素样式 */
+input[type="text"],
+textarea,
+select {
+    padding: 8px;
+    border: 1px solid #d9d9d9;
+    border-radius: 4px;
+    margin-top: 5px;
+    margin-bottom: 10px;
+    font-size: 1em;
+    width: calc(100% - 20px); /* 适应容器宽度 */
+    max-width: 400px; /* 最大宽度 */
+}
+input[type="checkbox"],
+input[type="radio"] {
+    margin-right: 5px;
+    vertical-align: middle; /* 对齐标签 */
+}
+label {
+    margin-right: 15px;
+    vertical-align: middle;
+}
+
+/* 子组件容器样式 (保持不变) */
+.child-container {
+    border: 1px dashed green;
+    padding: 15px; /* 增加内边距 */
+    margin-top: 20px; /* 增加上外边距 */
+    background-color: #f0fff0; /* 淡绿色背景 */
+    border-radius: 6px; /* 圆角 */
+}
+.child-container h4 {
+    margin-top: 0;
+    color: green;
+    border-bottom: none; /* 子组件标题无下划线 */
+    padding-bottom: 5px;
+    margin-bottom: 10px;
+}
+.child-container button {
+    background-color: #95de64; /* 稍亮的绿色按钮 */
+    border: 1px solid #52c41a;
+    color: #333;
+}
+.child-container button:hover {
+    background-color: #b7eb8f;
+}
+
 </style>
