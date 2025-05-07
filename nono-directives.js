@@ -6,10 +6,15 @@
         console.error("指令错误：核心库 (nono-core.js) 必须先加载！");
         return;
     }
-    // console.log("指令系统：nono-directives.js 加载中..."); // 启动日志可以保留或移除
+    // console.log("指令系统：nono-directives.js 加载中..."); // 调试时可以取消注释此行
 
     // 从核心库获取所需函数
-    const { createEffect, compileNode, createSignal } = window.NueCore;
+    // 注意：在指令处理器内部，如果需要调用 NueCore 上的方法（如 cleanupAndRemoveNode），
+    // 应该使用 window.NueCore.methodName() 来确保调用的是正确的实例。
+    // createEffect, compileNode, createSignal 通常作为参数传入或在顶层作用域可用。
+    // 此处假设 compileNode, createSignal 是通过某种方式在指令处理器的作用域中可用的，
+    // 但为了明确，调用 NueCore 上的方法时最好使用 window.NueCore。
+    // const { createEffect, compileNode, createSignal } = window.NueCore; // 这样写是OK的
 
     // ==================================
     // 核心工具函数
@@ -24,37 +29,40 @@
      * @throws 如果表达式计算出错。
      */
     function evaluateExpression(expression, scope, additionalContext = {}) {
-        const context = Object.create(scope); // 继承组件作用域
-        Object.assign(context, additionalContext); // 合并额外上下文
+        const context = Object.create(scope); // 继承组件作用域，避免直接修改原scope
+        Object.assign(context, additionalContext); // 合并额外的上下文变量
 
         try {
             // 使用 Function 构造器和 'with' 语句在受控环境中执行表达式
+            // 'with' 语句可以将一个对象的属性当作当前作用域的变量来访问
             const evaluatorFunction = new Function("context", `with(context) { return (${expression}); }`);
-            return evaluatorFunction.call(null, context);
+            return evaluatorFunction.call(null, context); // 使用 null 作为 this，因为表达式不应依赖特定的 this 上下文
         } catch (error) {
             console.error(`指令错误：执行表达式 "${expression}" 时出错:`, error, "\n作用域:", scope, "\n额外上下文:", additionalContext);
-            throw error; // 重新抛出，以便上层 createEffect 等可以捕获
+            throw error; // 重新抛出错误，以便上层调用者（如 createEffect）可以捕获
         }
     }
 
     /**
      * 尝试将表达式解析为可写入的 Signal 访问器函数。
      * 主要用于 n-model 指令。
-     * @param {string} expression - 通常是 Signal 的名称字符串。
+     * @param {string} expression - 通常是 Signal 的名称字符串，例如 "textInput"。
      * @param {object} scope - 组件作用域。
      * @returns {Function | null} Signal 访问器函数，或在失败时返回 null。
      */
     function getSignalAccessor(expression, scope) {
         try {
+            // 尝试在作用域中求值表达式，期望得到一个 Signal 函数
             const potentialSignal = evaluateExpression(expression, scope);
-            // 基本检查：是函数且参数数量符合 Signal 特征
+            // 基本检查：它必须是一个函数，并且参数数量符合 Signal 的特征（0个参数获取，1个参数设置）
             if (typeof potentialSignal === "function" && potentialSignal.length <= 1) {
                 return potentialSignal;
             }
         } catch (error) {
-            // 忽略求值错误，因为表达式可能不是直接的 Signal 引用
+            // 忽略求值错误，因为表达式可能不是一个直接的 Signal 引用 (例如，可能是更复杂的路径)
+            // 错误已在 evaluateExpression 中打印
         }
-        console.warn(`指令警告：无法将表达式 "${expression}" 解析为可写的 Signal。`);
+        console.warn(`指令警告：无法将表达式 "${expression}" 解析为可写的 Signal。请确保它指向一个由 createSignal 创建的变量。`);
         return null;
     }
 
@@ -64,127 +72,111 @@
 
     /**
      * 处理 n-if 指令：根据条件动态添加或移除元素。
-     * @param {Element} element - 带有 n-if 属性的元素。
+     * @param {Element} element - 带有 n-if 属性的原始模板元素 (将被替换为锚点)。
      * @param {string} expression - n-if 的条件表达式。
      * @param {object} scope - 组件作用域。
-     * @param {Function} compileFn - 核心编译函数 (NueCore.compileNode)。
-     * @param {object} directiveHandlers - 指令处理器集合。
-     * @param {string} componentName - 当前组件名，用于日志。
+     * @param {Function} compileFn - 核心编译函数 (NueCore.compileNode)，用于编译条件为真时创建的元素。
+     * @param {object} directiveHandlers - 指令处理器集合 (主要用于 compileFn 内部递归调用)。
+     * @param {string} componentName - 当前组件名，用于日志和调试。
      */
     function handleNIf(element, expression, scope, compileFn, directiveHandlers, componentName) {
         const parent = element.parentNode;
-        const anchor = document.createComment(` n-if anchor: ${expression} `); // 注释锚点
+        // 创建一个注释节点作为锚点，标记 n-if 内容在 DOM 中的位置
+        const anchor = document.createComment(` n-if anchor for: ${expression} `); 
         if (parent) {
-            parent.replaceChild(anchor, element);
+            parent.replaceChild(anchor, element); // 用锚点替换原始的 n-if 元素
         } else {
-            console.warn(`指令警告：[${componentName}] n-if 元素无父节点，可能无法正确处理。`);
+            // 如果原始元素没有父节点 (例如，它是一个未附加到DOM的片段的一部分)，则指令可能无法正常工作
+            console.warn(`指令警告：[${componentName}] n-if 元素 <${element.tagName}> 无父节点，可能无法正确处理。`);
             return;
         }
 
-        let currentElement = null; // 当前显示的元素实例
-        let isCompiledOnce = false; // 标记模板是否已编译过一次
+        let currentElement = null; // 存储当前因 n-if 为真而显示的元素实例
 
-        createEffect(() => {
-            let condition = false;
+        // 使用 createEffect 监听条件表达式所依赖的 Signal 的变化
+        window.NueCore.createEffect(() => { // 明确使用 window.NueCore.createEffect
+            let condition = false; // 默认为 false，以防表达式计算出错
             try {
-                condition = !!evaluateExpression(expression, scope);
+                condition = !!evaluateExpression(expression, scope); // 将表达式结果转为布尔值
             } catch (error) {
                 // evaluateExpression 内部已打印错误，这里仅设置默认条件
                 condition = false;
             }
 
-            if (condition) {
-                if (!currentElement) {
-                    // 条件为真且元素未显示
+            if (condition) { // 如果条件为真
+                if (!currentElement) { // 并且当前没有元素显示 (即，之前条件为假或首次渲染)
+                    // 克隆原始模板元素 (element 参数是原始的、未编译的模板)
                     const clone = element.cloneNode(true);
-                    clone.removeAttribute("n-if"); // 移除指令属性，防止无限递归
+                    clone.removeAttribute("n-if"); // 从克隆体上移除 n-if 指令，防止无限递归编译
 
-                    if (!isCompiledOnce) {
-                        // 仅在首次创建时编译
-                        compileFn(clone, scope, directiveHandlers, componentName);
-                        isCompiledOnce = true;
-                    }
+                    // console.log(`N-IF [${componentName}]: Compiling content for expression "${expression}"`);
+                    // **关键：每次元素需要显示时，都必须编译这个新的克隆体**
+                    // compileFn (即 NueCore.compileNode) 会处理 clone 内部的插值、其他指令等
+                    compileFn(clone, scope, directiveHandlers, componentName);
+                    
+                    // 将编译好的克隆体插入到锚点之后
                     anchor.parentNode?.insertBefore(clone, anchor.nextSibling);
-                    currentElement = clone;
+                    currentElement = clone; // 更新 currentElement 为新显示的元素
                 }
-            } else {
-                if (currentElement) {
-                    // 条件为假且元素已显示
-                    // NueCore.cleanupAndRemoveNode(currentElement); // 使用核心库的清理函数
-                    currentElement.parentNode?.removeChild(currentElement); // 简单移除
-                    currentElement = null;
+            } else { // 如果条件为假
+                if (currentElement) { // 并且当前有元素正在显示
+                    // 使用核心库的清理函数移除元素，这会处理子组件卸载等逻辑
+                    window.NueCore.cleanupAndRemoveNode(currentElement);
+                    currentElement = null; // 重置 currentElement
                 }
             }
         });
     }
 
     /**
-     * 处理 n-for 指令：根据数组或可迭代对象渲染列表，支持基于 key 的高效更新。
+     * 处理 n-for 指令：根据数组或可迭代对象渲染列表。
      * @param {Element} templateElement - 作为模板的元素 (例如，带有 n-for 的 <li>)。
      * @param {string} expression - n-for 表达式，如 "(item, index) in items" 或 "item in items"。
      * @param {object} scope - 组件作用域。
-     * @param {Function} compileFn - 核心编译函数 (NueCore.compileNode)，用于编译列表项的内容。
-     * @param {object} directiveHandlers - 指令处理器集合 (用于递归编译)。
-     * @param {string} componentName - 当前组件名，用于日志和生成更详细的组件路径。
+     * @param {Function} compileFn - 核心编译函数 (NueCore.compileNode)。
+     * @param {object} directiveHandlers - 指令处理器集合。
+     * @param {string} componentName - 当前组件名。
      */
     function handleNFor(templateElement, expression, scope, compileFn, directiveHandlers, componentName) {
-        const parentOfTemplate = templateElement.parentNode; // n-for 模板元素在 DOM 中原始的父节点
-
-        // 锚点注释节点，用于标记 n-for 列表在 DOM 中的开始位置
+        const parentOfTemplate = templateElement.parentNode;
         const anchor = document.createComment(` n-for anchor for: ${expression} `);
 
         if (parentOfTemplate) {
-            // 用锚点替换掉原始的 n-for 模板元素
-            // 原始模板元素将不再直接参与渲染，而是作为克隆的源
             parentOfTemplate.replaceChild(anchor, templateElement);
         } else {
-            // 这种情况理论上不应该在一个正常的、已挂载的组件中对顶层 n-for 发生。
-            // 如果 templateElement 是在内存中创建的片段的一部分，则可能没有父节点。
-            // 对于深层嵌套的 n-for，如果外层 compileNode 正在处理一个游离的克隆节点，
-            // 那么这个警告也可能出现。但我们主要关注顶层 n-for 的情况。
             console.error(`指令错误：[${componentName}] n-for 模板元素 <${templateElement.tagName}> 无父节点，无法放置渲染锚点。列表可能无法渲染。`);
-            return; // 无法继续，因为没有地方插入锚点和列表项
+            return;
         }
 
-        // 解析 n-for 表达式: (item, index) in iterable or item in iterable
         const match = expression.match(/^\s*\(?\s*([a-zA-Z0-9_]+)\s*(?:,\s*([a-zA-Z0-9_]+)\s*)?\)?\s+in\s+(.+)$/);
         if (!match) {
             console.error(`指令错误：[${componentName}] 无效的 n-for 表达式: "${expression}"`);
             anchor.textContent = `[n-for 错误: 无效表达式 "${expression}"]`;
-            // 尝试将原始模板元素放回去，以避免页面因指令错误而完全空白该区域
             if (anchor.parentNode) anchor.parentNode.replaceChild(templateElement, anchor);
             return;
         }
 
-        const itemAlias = match[1]; // 迭代项的别名，如 "item"
-        const indexAlias = match[2]; // 迭代索引的别名，如 "index" (可选)
-        const iterableExpression = match[3].trim(); // 提供可迭代对象的表达式，如 "items()"
+        const itemAlias = match[1]; // 迭代项别名
+        const indexAlias = match[2]; // 索引别名 (可选)
+        const iterableExpression = match[3].trim(); // 提供可迭代对象的表达式
 
-        // 提取 Key 表达式
         let keyExpression = templateElement.getAttribute(":key") || templateElement.getAttribute("key");
         if (keyExpression) {
-            // 从原始模板元素上移除 key 属性，因为它仅用于 n-for 的 diff 逻辑，
-            // 不应该出现在每个渲染出来的列表项的属性上 (除非开发者明确也绑定了 :key)
             templateElement.removeAttribute(":key");
             templateElement.removeAttribute("key");
         } else {
             console.warn(`指令警告：[${componentName}] n-for 表达式 "${expression}" 未指定 ':key'。将使用数组索引作为 key，这可能导致在列表项重排序或非末尾增删时性能不佳或状态丢失。`);
         }
 
-        // 存储当前渲染的节点条目，映射: key -> { node, itemSignal, indexSignal, localScope, key }
-        let keyedNodeEntries = new Map();
+        let keyedNodeEntries = new Map(); // 存储 key -> { node, itemSignal, indexSignal, localScope, key }
 
-        // 使用 createEffect 监听可迭代对象的变化，并在变化时重新渲染列表
-        NueCore.createEffect(() => {
-            // console.log(`指令信息：[${componentName}] n-for effect for "${iterableExpression}"`);
-            let newItemsArray; // 本次渲染需要的数据列表
+        window.NueCore.createEffect(() => { // 明确使用 window.NueCore.createEffect
+            let newItemsArray;
             try {
                 const iterable = directiveHandlers.evaluateExpression(iterableExpression, scope);
-                if (iterable == null) {
-                    // 处理 null 或 undefined
+                if (iterable == null) { // 处理 null 或 undefined
                     newItemsArray = [];
-                } else if (typeof iterable[Symbol.iterator] === "function") {
-                    // 检查是否可迭代
+                } else if (typeof iterable[Symbol.iterator] === "function") { // 检查是否可迭代
                     newItemsArray = Array.from(iterable);
                 } else {
                     console.warn(`指令警告：[${componentName}] n-for 表达式 "${iterableExpression}" 的结果不是可迭代对象。实际值:`, iterable);
@@ -195,127 +187,89 @@
                 newItemsArray = [];
             }
 
-            const newKeyedNodeEntries = new Map(); // 用于构建本次渲染结果的 Map
-            const nodesToRenderInOrder = []; // 按新顺序排列的 DOM 节点，用于后续的 DOM 操作
-            const oldKeys = new Set(keyedNodeEntries.keys()); // 记录上一次渲染的所有 keys，用于检测需要删除的项
+            const newKeyedNodeEntries = new Map();
+            const nodesToRenderInOrder = [];
+            const oldKeys = new Set(keyedNodeEntries.keys());
 
-            // --- 步骤 1: 遍历新数据，进行 Diff，创建或复用节点 ---
             newItemsArray.forEach((currentItemData, currentIndex) => {
-                let currentItemKey; // 当前迭代项的 key
-                if (keyExpression) {
-                    // 如果指定了 key 表达式 (例如 :key="item().id")
-                    // 为 key 的求值创建一个临时的、非响应式的上下文
-                    const keyEvalContext = Object.create(scope); // 继承父作用域以访问其方法或全局变量
-
-                    // 关键：itemAlias (如 "item") 映射为一个返回原始数据的函数，以匹配 item().id 这样的表达式
-                    keyEvalContext[itemAlias] = function () {
-                        return currentItemData;
-                    };
+                let currentItemKey;
+                if (keyExpression) { // 如果指定了 key 表达式
+                    const keyEvalContext = Object.create(scope);
+                    keyEvalContext[itemAlias] = function () { return currentItemData; };
                     if (indexAlias) {
-                        // indexAlias (如 "index") 也映射为一个返回当前索引的函数
-                        keyEvalContext[indexAlias] = function () {
-                            return currentIndex;
-                        };
+                        keyEvalContext[indexAlias] = function () { return currentIndex; };
                     }
-
                     try {
                         currentItemKey = String(directiveHandlers.evaluateExpression(keyExpression, keyEvalContext));
                     } catch (e) {
                         console.error(`指令错误：[${componentName}] 计算 n-for 的 key 表达式 "${keyExpression}" 失败 for item:`, currentItemData, "\n临时上下文:", keyEvalContext, e);
-                        currentItemKey = `__error_key_at_index_${currentIndex}__`; // 出错时给一个基于索引的唯一 key
+                        currentItemKey = `__error_key_at_index_${currentIndex}__`; // 出错时使用基于索引的 key
                     }
-                } else {
-                    // 如果没有指定 key，则回退到使用数组索引作为 key (字符串化)
+                } else { // 未指定 key，使用索引作为 key
                     currentItemKey = String(currentIndex);
                 }
 
-                oldKeys.delete(currentItemKey); // 此 key 存在于新列表中，从“待删除旧 keys 集合”中移除
+                oldKeys.delete(currentItemKey); // 此 key 存在于新列表中，从“待删除”集合中移除
 
-                let entry = keyedNodeEntries.get(currentItemKey); // 尝试从上次渲染的条目中获取
+                let entry = keyedNodeEntries.get(currentItemKey); // 尝试复用旧条目
 
-                if (entry) {
-                    // --- 情况 A: 复用现有节点 (key 匹配成功) ---
-                    entry.itemSignal(currentItemData); // 更新该项的 item Signal 的值
+                if (entry) { // 复用现有节点
+                    entry.itemSignal(currentItemData); // 更新 item Signal
                     if (entry.indexSignal) {
-                        // 如果使用了 index 别名
-                        entry.indexSignal(currentIndex); // 更新该项的 index Signal 的值
+                        entry.indexSignal(currentIndex); // 更新 index Signal (如果存在)
                     }
-                    // entry.localScope 中的 item 和 index 已经是 Signal，它们的值已通过上面的调用更新。
-                    // entry.node 不需要重新编译，因为其内部的绑定依赖于 itemSignal 和 indexSignal。
-                } else {
-                    // --- 情况 B: 创建新节点 (key 是全新的，或之前不存在) ---
-                    const clone = templateElement.cloneNode(true); // 克隆原始模板元素 (例如 <li>)
+                } else { // 创建新节点
+                    const clone = templateElement.cloneNode(true);
+                    clone.removeAttribute("n-for"); // 从克隆体移除 n-for，防递归
 
-                    // 关键修复：从克隆体上移除 n-for 指令属性本身！
-                    // 否则，当 compileFn 处理这个 clone 时，会再次遇到 n-for 并错误地递归调用 handleNFor，
-                    // 导致之前提到的 "无父节点" 警告，因为此时 clone 是游离的。
-                    clone.removeAttribute("n-for");
-
-                    // 为这个列表项创建一个新的独立作用域，继承自父组件作用域
-                    const iterationScope = Object.create(scope);
-                    const itemSignal = NueCore.createSignal(currentItemData); // item 数据是响应式的
-                    iterationScope[itemAlias] = itemSignal; // 在模板中通过 item() 访问
+                    const iterationScope = Object.create(scope); // 为列表项创建独立作用域
+                    const itemSignal = window.NueCore.createSignal(currentItemData); // item 数据是响应式的
+                    iterationScope[itemAlias] = itemSignal;
 
                     let indexSignal = null;
                     if (indexAlias) {
-                        indexSignal = NueCore.createSignal(currentIndex); // index 也是响应式的
-                        iterationScope[indexAlias] = indexSignal; // 在模板中通过 index() 访问
+                        indexSignal = window.NueCore.createSignal(currentIndex); // index 也是响应式的
+                        iterationScope[indexAlias] = indexSignal;
                     }
 
-                    // 编译新克隆出来的列表项节点及其所有子内容
-                    // 使用 iterationScope，这样列表项内部的绑定可以访问到 item 和 index
-                    // componentName 也传递下去，用于更详细的日志/错误追踪
                     const itemComponentName = `${componentName} [n-for item key: ${currentItemKey}]`;
-                    compileFn(clone, iterationScope, directiveHandlers, itemComponentName);
+                    compileFn(clone, iterationScope, directiveHandlers, itemComponentName); // 编译新列表项
 
-                    // 创建新的节点条目
                     entry = {
-                        node: clone, // 编译好的 DOM 节点
+                        node: clone,
                         itemSignal,
                         indexSignal,
-                        localScope: iterationScope, // 该项的独立作用域
+                        localScope: iterationScope,
                         key: currentItemKey,
                     };
                 }
-                nodesToRenderInOrder.push(entry.node); // 将节点按新顺序收集起来
-                newKeyedNodeEntries.set(currentItemKey, entry); // 将条目存入新的 Map
+                nodesToRenderInOrder.push(entry.node); // 按新顺序收集节点
+                newKeyedNodeEntries.set(currentItemKey, entry); // 存入新 Map
             });
 
-            // --- 步骤 2: 移除不再需要的旧节点 ---
-            // 此时 oldKeys 集合中剩下的都是在新数据列表中不再存在的 key
+            // 移除不再需要的旧节点
             oldKeys.forEach((keyToRemove) => {
                 const entryToRemove = keyedNodeEntries.get(keyToRemove);
                 if (entryToRemove && entryToRemove.node) {
-                    // console.log(`指令信息：[${componentName}] n-for 正在移除 key 为 "${keyToRemove}" 的节点`);
-                    NueCore.cleanupAndRemoveNode(entryToRemove.node); // 使用核心库的清理函数，确保组件卸载等逻辑执行
+                    window.NueCore.cleanupAndRemoveNode(entryToRemove.node); // 使用核心清理函数
                 }
             });
 
-            // --- 步骤 3: 更新 DOM 顺序 ---
-            // 遍历 nodesToRenderInOrder (已按新数据顺序排列的节点)，
-            // 确保它们在 DOM 中也以这个顺序排列在 anchor 之后。
-            // 这个过程会处理节点的移动和新节点的插入。
-            let currentPositionMarker = anchor; // DOM 操作的参考点，初始为列表的起始锚点
-            const parentOfAnchor = anchor.parentNode; // 获取锚点的父节点，所有列表项都将插入到这里
-
+            // 更新 DOM 顺序
+            let currentPositionMarker = anchor;
+            const parentOfAnchor = anchor.parentNode;
             if (!parentOfAnchor) {
-                // 这种情况非常罕见，意味着锚点在渲染过程中被移除了，列表无法更新。
                 console.error(`指令致命错误：[${componentName}] n-for 的渲染锚点已从 DOM 中移除，无法更新列表。`);
                 return;
             }
-
             nodesToRenderInOrder.forEach((nodeToPlace) => {
-                // 如果 nodeToPlace 的前一个兄弟不是 currentPositionMarker，
-                // 或者 nodeToPlace 根本不在这个父节点下 (新创建的节点)，
-                // 则需要将其插入/移动到 currentPositionMarker 之后。
                 if (nodeToPlace.parentNode !== parentOfAnchor || nodeToPlace.previousSibling !== currentPositionMarker) {
                     parentOfAnchor.insertBefore(nodeToPlace, currentPositionMarker.nextSibling);
                 }
-                currentPositionMarker = nodeToPlace; // 更新标记为刚处理（或确认位置正确）的节点
+                currentPositionMarker = nodeToPlace;
             });
 
-            // 更新存储的节点条目，为下一次 diff 做准备
-            keyedNodeEntries = newKeyedNodeEntries;
+            keyedNodeEntries = newKeyedNodeEntries; // 更新存储的节点条目
         });
     }
 
@@ -327,7 +281,7 @@
      * @param {string} componentName - 当前组件名。
      */
     function handleNHtml(element, expression, scope, componentName) {
-        createEffect(() => {
+        window.NueCore.createEffect(() => { // 明确使用 window.NueCore.createEffect
             let htmlContent = "";
             try {
                 htmlContent = String(evaluateExpression(expression, scope) ?? ""); // 处理 null/undefined
@@ -348,8 +302,9 @@
      * @param {string} componentName - 当前组件名。
      */
     function handleNShow(element, expression, scope, componentName) {
+        // 保存元素原始的 display 值 (如果不是 "none")
         const originalDisplay = element.style.display === "none" ? "" : element.style.display;
-        createEffect(() => {
+        window.NueCore.createEffect(() => { // 明确使用 window.NueCore.createEffect
             let condition = true; // 默认显示，以防表达式计算出错
             try {
                 condition = !!evaluateExpression(expression, scope);
@@ -369,44 +324,49 @@
      */
     function handleNModel(element, expression, scope, componentName) {
         const tagName = element.tagName.toLowerCase();
-        const inputType = element.type?.toLowerCase();
-        const signalAccessor = getSignalAccessor(expression, scope);
+        const inputType = element.type?.toLowerCase(); // input 元素的 type 属性
+        const signalAccessor = getSignalAccessor(expression, scope); // 获取 Signal 读写函数
 
         if (!signalAccessor) {
             console.error(`指令错误：[${componentName}] n-model="${expression}" 无法绑定，未解析为可写 Signal。`);
-            element.style.outline = "2px solid red"; // 视觉提示错误
+            element.style.outline = "2px solid red"; // 视觉提示绑定错误
             return;
         }
 
         // 1. 从 Signal 更新视图 (Model -> View)
-        createEffect(() => {
-            const value = signalAccessor();
+        window.NueCore.createEffect(() => { // 明确使用 window.NueCore.createEffect
+            const value = signalAccessor(); // 获取 Signal 的当前值
             if (tagName === "input") {
-                if (inputType === "checkbox") element.checked = !!value;
-                else if (inputType === "radio")
-                    element.checked = value == element.value; // 松散比较
-                else if (element.value !== String(value ?? "")) element.value = String(value ?? "");
+                if (inputType === "checkbox") {
+                    element.checked = !!value;
+                } else if (inputType === "radio") {
+                    element.checked = (value == element.value); // 使用松散比较，因为 value 可能是数字或字符串
+                } else if (element.value !== String(value ?? "")) { // 对于 text, password 等
+                    element.value = String(value ?? ""); // 处理 null/undefined 为空字符串
+                }
             } else if ((tagName === "select" || tagName === "textarea") && element.value !== String(value ?? "")) {
                 element.value = String(value ?? "");
             }
         });
 
         // 2. 从视图更新 Signal (View -> Model)
-        const eventName = tagName === "select" || inputType === "checkbox" || inputType === "radio" ? "change" : "input";
+        // 根据元素类型选择合适的事件 (input 通常更实时，change 用于 select, checkbox, radio)
+        const eventName = (tagName === "select" || inputType === "checkbox" || inputType === "radio") ? "change" : "input";
         element.addEventListener(eventName, (event) => {
             const target = event.target;
             let newValue;
-            if (inputType === "checkbox") newValue = target.checked;
-            else if (inputType === "radio") {
-                if (!target.checked) return; // 只处理选中的 radio
+            if (inputType === "checkbox") {
+                newValue = target.checked;
+            } else if (inputType === "radio") {
+                if (!target.checked) return; // 只处理被选中的 radio 按钮
                 newValue = target.value;
-            } else {
+            } else { // input[type=text], textarea, select
                 newValue = target.value;
             }
             try {
-                signalAccessor(newValue);
+                signalAccessor(newValue); // 更新 Signal 的值
             } catch (error) {
-                //理论上不应发生，因为 signalAccessor 是函数
+                // 理论上不应发生，因为 signalAccessor 是函数
                 console.error(`指令错误：[${componentName}] 更新 n-model Signal "${expression}" 时出错:`, error);
             }
         });
@@ -421,7 +381,7 @@
      * @param {string} componentName - 当前组件名。
      */
     function handleAttributeBinding(element, attrName, expression, scope, componentName) {
-        createEffect(() => {
+        window.NueCore.createEffect(() => { // 明确使用 window.NueCore.createEffect
             let value;
             try {
                 value = evaluateExpression(expression, scope);
@@ -433,35 +393,43 @@
             if (attrName === "class") {
                 // 支持字符串、数组、对象形式的 class 绑定
                 let classString = "";
-                if (typeof value === "string") classString = value;
-                else if (Array.isArray(value)) classString = value.filter(Boolean).join(" ");
-                else if (typeof value === "object" && value !== null) {
+                if (typeof value === "string") {
+                    classString = value;
+                } else if (Array.isArray(value)) {
+                    classString = value.filter(Boolean).join(" "); // 过滤掉假值并用空格连接
+                } else if (typeof value === "object" && value !== null) {
                     classString = Object.keys(value)
-                        .filter((key) => value[key])
+                        .filter((key) => value[key]) // 只保留值为 true 的键
                         .join(" ");
                 }
                 // 注意: element.className 会覆盖所有现有 class。
-                // 更精细的 class 管理需要追踪由指令添加的 class。
+                // 如果需要更精细的 class 管理 (例如，保留静态 class)，需要更复杂的逻辑。
+                // 对于简单场景，直接赋值 className 是可行的。
                 element.className = classString;
             } else if (attrName === "style") {
                 // 支持字符串或对象形式的 style 绑定
-                if (typeof value === "string") element.style.cssText = value;
-                else if (typeof value === "object" && value !== null) {
+                if (typeof value === "string") {
+                    element.style.cssText = value; // 直接设置 cssText
+                } else if (typeof value === "object" && value !== null) {
                     element.style.cssText = ""; // 清除旧样式再应用新样式
                     for (const key in value) {
-                        if (value.hasOwnProperty(key)) element.style[key] = value[key];
+                        if (value.hasOwnProperty(key)) {
+                            element.style[key] = value[key]; // 逐个设置样式属性
+                        }
                     }
                 } else {
-                    element.style.cssText = ""; // 无效值则清空
+                    element.style.cssText = ""; // 无效值则清空样式
                 }
             } else {
                 // 其他常规属性和布尔属性
                 if (typeof value === "boolean") {
-                    // 布尔属性 (disabled, checked, etc.)
+                    // 对于布尔属性 (如 disabled, checked, readonly)，值为 true 时添加属性，false 时移除
                     value ? element.setAttribute(attrName, "") : element.removeAttribute(attrName);
                 } else if (value === null || value === undefined) {
+                    // 如果值为 null 或 undefined，则移除该属性
                     element.removeAttribute(attrName);
                 } else {
+                    // 其他情况，将值转为字符串并设置属性
                     element.setAttribute(attrName, String(value));
                 }
             }
@@ -472,7 +440,7 @@
     // 暴露指令处理器集合
     // ==================================
     window.NueDirectives = {
-        evaluateExpression, // 核心求值函数，供框架其他部分使用
+        evaluateExpression, // 核心求值函数，供框架其他部分（如 compileNode 中的插值处理）使用
         handleNIf,
         handleNFor,
         handleNHtml,

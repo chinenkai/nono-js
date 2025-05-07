@@ -29,7 +29,7 @@
         document.addEventListener('DOMContentLoaded', () => {
             if (window.NueCore && typeof window.NueCore.init === 'function') {
                 // 参数: 挂载目标ID, 根组件文件, 应用版本号 (可选), 初始Props (可选)
-                window.NueCore.init('app', 'demo.nue', '1.0.3'); 
+                window.NueCore.init('app', 'demo.nue', Date.now()); 
             } else {
                 console.error("NueCore.js 或其 init 函数未能正确加载！");
                 const appDiv = document.getElementById('app');

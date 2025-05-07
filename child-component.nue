@@ -40,6 +40,8 @@
 
     // 子组件内部的响应式状态
     const internalCount = createSignal(100);
+    const utilsInfo = createSignal(null); // 新增: 存储来自 utils.njs 的信息
+    const childFetchedData = createSignal(null); // 新增
 
     // 子组件的方法
     const incrementInternal = () => {
@@ -56,12 +58,59 @@
         emit('child-notified', payload);
     };
 
+
+    // 新增: 子组件获取数据的方法
+    const fetchChildData = async () => {
+        childFetchedData(null);
+        try {
+            // 假设 utils.njs 与 child-component.nue 在同一目录
+            // 如果目录结构不同，例如 utils.njs 在父目录，可以使用 '../utils.njs'
+            const utils = await importNjs('./utils.njs');
+            const data = await utils.fetchData('childSpecificData');
+            childFetchedData(data);
+        } catch (err) {
+            console.error("ChildComponent: 获取数据失败", err);
+            childFetchedData({ data: "加载失败" });
+        }
+    };
+
+    // 子组件的 onMount 也可以是 async
+    const onMount = async () => {
+        console.log('子组件 (child-component.nue) 已挂载 (onMount)!');
+        try {
+            console.log('ChildComponent: 正在加载 utils.njs...');
+            // 假设 utils.njs 与 child-component.nue 在同一目录
+            const utils = await importNjs('./utils.njs');
+            console.log('ChildComponent: utils.njs 加载完成!', utils);
+            utilsInfo({
+                greeting: utils.greet('子组件用户'),
+                formattedDate: utils.formatDate()
+            });
+
+            // 测试 utils.njs 是否真的只执行一次 (config.njs 也一样)
+            // 如果 demo.nue 先加载了 utils.njs，这里的 utils 应该是缓存的同一对象
+            // utils.njs 和 config.njs 内部的 console.log 不会重复打印
+            console.log('ChildComponent: 尝试再次加载 utils.njs (应来自缓存)...');
+            const utilsAgainChild = await importNjs('./utils.njs');
+            console.log('ChildComponent: utils.njs 再次加载完成 (来自缓存)', utilsAgainChild);
+            console.log('ChildComponent: 两次加载的 utils 是否为同一对象?', utils === utilsAgainChild); // 应该为 true
+
+        } catch (err) {
+            console.error("ChildComponent: 加载 utils.njs 失败", err);
+            utilsInfo({ greeting: '错误', formattedDate: '错误' });
+        }
+    };
+
     // 子组件需要暴露给模板的内部状态和方法
     return {
         internalCount,
         incrementInternal,
         notifyParent,
-        props // 将 props 暴露给模板，这样模板可以用 {{ props.xxx }}
+        props, // 将 props 暴露给模板，这样模板可以用 {{ props.xxx }}
+        utilsInfo, // 新增
+        fetchChildData, // 新增
+        childFetchedData, // 新增
+        onMount // 暴露 onMount
     };
 </script>
 

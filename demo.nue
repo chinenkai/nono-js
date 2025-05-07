@@ -193,6 +193,19 @@
         <p>来自子组件的最新消息: <strong>{{ childNotification() }}</strong></p>
     </div>
 
+    <!-- ======================================== -->
+    <!-- 8. NJS 模块调用示例 (新增) -->
+    <!-- ======================================== -->
+    <div class="container">
+        <h3>NJS 模块调用示例 (utils.njs)</h3>
+        <p>应用名称 (来自 utils.njs -> config.njs): <strong>{{ appNameFromUtils() }}</strong></p>
+        <p>格式化日期 (来自 utils.njs): <em>{{ formattedDate() }}</em></p>
+        <p>问候语 (来自 utils.njs): {{ greeting() }}</p>
+        <button @click="loadRemoteData">从 utils.njs 加载远程数据</button>
+        <p n-if="remoteData()">远程数据: {{ remoteData()?.data }} (时间戳: {{ remoteData()?.timestamp }})</p>
+        <p n-if="isLoadingData()">正在加载数据...</p>
+    </div>
+
 </template>
 
 <script>
@@ -229,6 +242,14 @@
 
     // --- 6. HTML 绑定状态 ---
     const rawHtmlContent = createSignal('<p style="color:purple;">这是<em>原始</em>HTML内容。</p>');
+
+    // --- 8. NJS 模块调用状态 (新增) ---
+    const appNameFromUtils = createSignal('加载中...');
+    const formattedDate = createSignal('加载中...');
+    const greeting = createSignal('加载中...');
+    const remoteData = createSignal(null);
+    const isLoadingData = createSignal(false);
+
 
     // --- 父组件方法 ---
     const add2ToCount = function() {
@@ -280,10 +301,51 @@
         }
         childNotification(notificationText);
     };
+
+    // 调用 NJS 模块的方法 ---
+    const loadRemoteData = async () => {
+        isLoadingData(true);
+        remoteData(null);
+        try {
+            // 假设 utils.njs 与 demo.nue 在同一目录
+            const utils = await importNjs('./utils.njs');
+            const data = await utils.fetchData('userProfile');
+            remoteData(data);
+        } catch (err) {
+            console.error("Demo.nue: 加载远程数据失败", err);
+            remoteData({ data: "加载失败: " + err.message, timestamp: Date.now() });
+        } finally {
+            isLoadingData(false);
+        }
+    };
     
-    // 生命周期钩子 (父组件的)
-    const onMount = () => {
+// --- 生命周期钩子 (父组件的) ---
+    const onMount = async () => { // onMount 现在可以是 async
         console.log('父组件 (demo.nue) 已挂载 (onMount)!');
+
+        // 使用顶层 await 加载 utils.njs
+        try {
+            console.log('Demo.nue: 正在加载 utils.njs...');
+            // 假设 utils.njs 与 demo.nue 在同一目录
+            const utils = await importNjs('./utils.njs'); 
+            console.log('Demo.nue: utils.njs 加载完成!', utils);
+
+            appNameFromUtils(utils.appNameFromConfig);
+            formattedDate(utils.formatDate(new Date()));
+            greeting(utils.greet('演示用户'));
+
+            // 测试重复加载 (应该从缓存获取，utils.njs 和 config.njs 内部的 console.log 不会重复打印)
+            console.log('Demo.nue: 尝试再次加载 utils.njs...');
+            const utilsAgain = await importNjs('./utils.njs');
+            console.log('Demo.nue: utils.njs 再次加载完成 (应来自缓存)', utilsAgain);
+            console.log('Demo.nue: 两次加载的 utils 是否为同一对象?', utils === utilsAgain); // 应该为 true
+
+        } catch (err) {
+            console.error("Demo.nue: 加载 utils.njs 失败", err);
+            appNameFromUtils('错误');
+            formattedDate('错误');
+            greeting('错误');
+        }
     };
     const onUnmount = () => {
         console.log('父组件 (demo.nue) 即将卸载 (onUnmount)!');
@@ -298,6 +360,8 @@
         showElement,
         items, addItem, removeItem, shuffleItems,
         rawHtmlContent, changeHtmlContent,
+        // 新增暴露的状态和方法
+        appNameFromUtils, formattedDate, greeting, remoteData, isLoadingData, loadRemoteData,
         onMount, onUnmount
     };
 </script>
