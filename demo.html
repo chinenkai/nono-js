@@ -27,12 +27,15 @@
     <!-- 4. 启动应用 -->
     <script>
         document.addEventListener('DOMContentLoaded', () => {
-            if (window.NueCore && typeof window.NueCore.mountComponent === 'function') {
-                // 调用核心库的挂载函数
-                window.NueCore.mountComponent('demo.nue', '#app');
+            if (window.NueCore && typeof window.NueCore.init === 'function') {
+                // 参数: 挂载目标ID, 根组件文件, 应用版本号 (可选), 初始Props (可选)
+                window.NueCore.init('app', 'demo.nue', '1.0.3'); 
             } else {
-                console.error("NueCore.js 或其依赖未能正确加载！");
-                document.getElementById('app').innerHTML = '<p style="color:red;">核心库加载失败！请检查控制台错误。</p>';
+                console.error("NueCore.js 或其 init 函数未能正确加载！");
+                const appDiv = document.getElementById('app');
+                if (appDiv) {
+                    appDiv.innerHTML = '<p style="color:red;">核心库加载失败！请检查控制台错误。</p>';
+                }
             }
         });
     </script>
