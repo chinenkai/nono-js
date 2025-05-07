@@ -1,11 +1,37 @@
 <template>
     <div class="child-container">
         <h4>子组件</h4>
+
+        <!-- 默认插槽 -->
+        <div class="default-slot-area" style="border: 1px dotted blue; padding: 5px; margin-bottom: 10px;">
+            <h5>默认插槽内容区域:</h5>
+            <slot>
+                <p style="color: gray;"><em>这是子组件的默认插槽后备内容。</em></p>
+            </slot>
+        </div>
+
         <p>从父组件接收的消息 (动态 Prop): <strong>{{ props.message() }}</strong></p>
         <p>从父组件接收的静态 Prop: <em>{{ props.staticMessage }}</em></p>
+
+        <!-- 具名插槽 -->
+        <div class="named-slot-area" style="border: 1px dotted purple; padding: 5px; margin-top: 10px; margin-bottom:10px;">
+            <h5>"header" 插槽内容区域:</h5>
+            <slot name="header">
+                <p style="color: purple;"><em>这是子组件的 "header" 插槽后备内容。</em></p>
+            </slot>
+        </div>
+        
         <p>子组件内部状态: {{ internalCount() }}</p>
         <button @click="incrementInternal">子组件按钮 (内部状态)</button>
         <button @click="notifyParent">通知父组件 (发送事件)</button>
+
+        <!-- 另一个具名插槽 -->
+        <div class="named-slot-footer-area" style="border: 1px dotted teal; padding: 5px; margin-top: 10px;">
+            <h5>"footerInfo" 插槽内容区域:</h5>
+            <slot name="footerInfo">
+                <p style="color: teal;"><em>子组件 "footerInfo" 插槽后备。</em></p>
+            </slot>
+        </div>
     </div>
 </template>
 
@@ -24,11 +50,9 @@
         const payload = {
             message: '来自子组件的消息!',
             timestamp: Date.now(),
-            internalValue: internalCount() // 可以把内部状态也发出去
+            internalValue: internalCount(),
+            sourceItem: '子组件主体' // 添加一个来源标识
         };
-        // 使用注入的 emit 函数发送事件
-        // 第一个参数是事件名，需要和父组件监听的 @事件名 匹配
-        // 第二个参数是可选的载荷 (payload)
         emit('child-notified', payload);
     };
 
@@ -51,6 +75,12 @@
     .child-container h4 {
         margin-top: 0;
         color: green;
+    }
+    .child-container h5 {
+        margin-top: 0;
+        margin-bottom: 5px;
+        font-size: 0.9em;
+        color: #555;
     }
     .child-container button {
         background-color: #90ee90; /* 淡绿色按钮 */

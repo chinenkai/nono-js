@@ -162,29 +162,41 @@
 
 
     <!-- ======================================== -->
-    <!-- 7. 子组件示例 (保持不变，但验证 props 和事件是否仍工作) -->
+    <!-- 7. 子组件示例 (带插槽) -->
     <!-- ======================================== -->
     <div class="container">
-        <h3>子组件示例</h3>
+        <h3>子组件示例 (带插槽)</h3>
         <p>要传递给子组件的消息 (动态 Prop): {{ message() }}</p>
         <button @click="changeMessage()">改变父组件消息 (会更新子组件)</button>
         <p>下面是子组件的内容:</p>
-        <!--
-            :message="message()" - 动态绑定父组件的 message Signal
-            static-message="..." - 静态 Prop
-            @child-notified="..." - 监听子组件事件
-        -->
-        <child-component
-            :message="message()"
-            static-message="这是来自父组件的静态问候"
-            @child-notified="handleChildEvent($event)"
-        ></child-component>
+        
+        <child-component :message="message()" static-message="这是来自父组件的静态问候" @child-notified="handleChildEvent($event)">
+            <!-- 默认插槽内容 -->
+            <p>这是父组件提供的<strong>默认插槽</strong>内容。</p>
+            <p>父组件计数器值: <strong>{{ count() }}</strong> (来自父作用域)</p>
+            <button @click="count(count() - 1)">父组件按钮 (在默认插槽中)</button>
+
+            <!-- "header" 具名插槽内容 -->
+            <template slot="header">
+                <div style="background-color: #e6f7ff; padding: 8px; border-radius: 4px;">
+                    <h4>这是父组件为 <code>header</code> 插槽提供的标题!</h4>
+                    <p>当前文本输入值: <em>{{ textInput() }}</em> (来自父作用域)</p>
+                </div>
+            </template>
+
+            <!-- "footerInfo" 具名插槽内容 (可以留空，测试后备) -->
+            <!-- 若要测试后备，注释掉下面的 <template> -->
+            <template slot="footerInfo">
+                 <p style="font-size:0.9em; color: #333;">父组件提供的页脚信息: {{ new Date().toLocaleTimeString() }}</p>
+            </template>
+        </child-component>
         <p>来自子组件的最新消息: <strong>{{ childNotification() }}</strong></p>
     </div>
 
 </template>
 
 <script>
+    // ... (脚本部分保持不变) ...
     // --- 1. 基础状态 ---
     const count = createSignal(0);
     const message = createSignal('这是 <strong>默认</strong> 父消息.');
@@ -251,7 +263,6 @@
         items(items().filter(item => item.id !== idToRemove));
     };
     const shuffleItems = function() {
-        // 简单打乱数组
         items([...items()].sort(() => Math.random() - 0.5));
     };
 
@@ -261,7 +272,6 @@
         rawHtmlContent(`<h4 style="color:teal;">内容已更新 @ ${time}</h4><ul><li>列表项 1</li><li>列表项 2</li></ul>`);
     };
 
-    // 处理子组件事件的方法 (保持不变)
     const handleChildEvent = function(payload) {
         console.log("父组件 demo.nue 收到子组件事件 'child-notified':", payload);
         let notificationText = `收到: "${payload.message}" (来自 ${payload.sourceItem || '未知项'}) at ${new Date(payload.timestamp).toLocaleTimeString()}`;
@@ -270,101 +280,25 @@
         }
         childNotification(notificationText);
     };
-
-    const timerIdState = createSignal(null); // (可选) 用于在模板中显示 timerId
-   // --- 生命周期钩子 ---
-
-    let timerId = null; // 将 timerId 定义在钩子函数外部，以便两者都能访问
-    /**
-     * onMount 钩子：在组件的 DOM 首次被插入到页面后执行。
-     * 非常适合执行只需要进行一次的初始化设置，例如：
-     * - 发起 API 请求获取初始数据。
-     * - 设置定时器或 WebSocket 连接。
-     * - 添加需要手动清理的全局事件监听器。
-     * - 初始化需要 DOM 元素的第三方库。
-     */
-    const onMount = () => {
-        console.log('子组件 (child-component) 已挂载 (onMount)!'); // 在控制台打印消息
-
-        // 示例：设置一个每 3 秒打印一次消息的定时器
-        timerId = setInterval(() => {
-            console.log('来自子组件 (child-component) 的定时问候!');
-            // 也可以在这里更新组件状态
-            // internalCount(internalCount() + 1); // 例如，让计数器自动增加
-        }, 3000);
-
-        timerIdState(timerId); // (可选) 更新状态以在模板中显示 ID
-
-        // 示例：添加一个 window resize 监听器 (记得在 onUnmount 中移除)
-        window.addEventListener('resize', handleResize);
-    };
-
-    /**
-     * onUnmount 钩子：在组件的 DOM 即将从页面移除之前执行。
-     * 这是执行清理工作的理想位置，以防止内存泄漏，例如：
-     * - 清除 onMount 中设置的定时器或延时调用。
-     * - 关闭 WebSocket 连接。
-     * - 移除 onMount 中添加的全局事件监听器。
-     * - 销毁不再需要的第三方库实例。
-     */
-    const onUnmount = () => {
-        console.log('子组件 (child-component) 即将卸载 (onUnmount)!'); // 在控制台打印消息
-
-        // 清理 onMount 中设置的定时器
-        if (timerId) {
-            clearInterval(timerId);
-            console.log('子组件定时器已清除。');
-            timerIdState(null); // (可选) 清空状态
-        }
-
-        // 清理 onMount 中添加的事件监听器
-        window.removeEventListener('resize', handleResize);
-        console.log('子组件 window resize 监听器已移除。');
-    };
     
-    // (仅为 onMount/onUnmount 示例添加的辅助函数)
-    const handleResize = () => {
-        console.log('子组件检测到窗口大小变化！');
+    // 生命周期钩子 (父组件的)
+    const onMount = () => {
+        console.log('父组件 (demo.nue) 已挂载 (onMount)!');
+    };
+    const onUnmount = () => {
+        console.log('父组件 (demo.nue) 即将卸载 (onUnmount)!');
     };
 
-    // **重要:** 暴露所有需要给模板使用的状态和方法
+
     return {
-        // 基础
-        count,
-        message,
-        childNotification,
-        add2ToCount,
-        changeMessage,
-        handleChildEvent,
-        // 属性绑定
-        isHighlighted,
-        textColor,
-        isButtonDisabled,
-        imageUrl,
-        imageAltText,
-        toggleHighlight,
-        changeTextColor,
-        toggleDisable,
-        changeImage,
-        // 双向绑定
-        textInput,
-        isChecked,
-        radioValue,
-        textAreaContent,
-        selectedValue,
-        // 条件渲染/显示
+        count, message, childNotification, add2ToCount, changeMessage, handleChildEvent,
+        isHighlighted, textColor, isButtonDisabled, imageUrl, imageAltText,
+        toggleHighlight, changeTextColor, toggleDisable, changeImage,
+        textInput, isChecked, radioValue, textAreaContent, selectedValue,
         showElement,
-        // 列表渲染
-        items,
-        addItem,
-        removeItem,
-        shuffleItems,
-        // HTML 绑定
-        rawHtmlContent,
-        changeHtmlContent,
-        // 钩子
-       onMount,    // 暴露 onMount 给框架
-        onUnmount   // 暴露 onUnmount 给框架
+        items, addItem, removeItem, shuffleItems,
+        rawHtmlContent, changeHtmlContent,
+        onMount, onUnmount
     };
 </script>
 
