@@ -183,6 +183,9 @@ function createEmitFunction(eventHandlers, componentName = '子组件') {
     };
 }
 
+function kebabToCamel(kebabCase) {
+    return kebabCase.replace(/-([a-z])/g, (match, letter) => letter.toUpperCase());
+}
 
 /**
  * 编译 DOM 节点，处理指令和插值
@@ -218,21 +221,27 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = '根�
                 const attrValue = attr.value;
 
                 if (attrName.startsWith(':')) { // 动态 Prop (属性绑定)
-                    const propName = attrName.substring(1);
+                    // 动态 Prop (属性绑定)
+                    const rawPropName = attrName.substring(1); // 获取原始 prop 名称，例如 "my-dynamic-prop"
+                    const camelCasePropName = kebabToCamel(rawPropName); // 转换为 camelCase，例如 "myDynamicProp"
                     const expression = attrValue;
-                    console.log(`[${parentComponentName}] 解析动态 Prop :${propName}="${expression}"`);
+
+                    // 更新日志以反映转换后的名称
+                    console.log(`[${parentComponentName}] 解析动态 Prop ${attrName}="${expression}" (as ${camelCasePropName})`);
+
                     const propSignal = createSignal(undefined);
                     createEffect(() => {
                         try {
                             const value = directiveHandlers.evaluateExpression(expression, scope);
                             propSignal(value);
                         } catch (error) {
-                            console.error(`[${parentComponentName}] 计算 Prop "${propName}" 表达式 "${expression}" 出错:`, error);
-                            propSignal(undefined);
+                            // 在错误日志中，可以同时显示原始名称和表达式，方便调试
+                            console.error(`[${parentComponentName}] 计算动态 Prop "${rawPropName}" (from ${attrName}) 表达式 "${expression}" 出错:`, error);
+                            propSignal(undefined); // 出错时给 propSignal 一个默认值
                         }
                     });
-                    initialProps[propName] = propSignal;
-                    attributesToRemove.push(attrName);
+                    initialProps[camelCasePropName] = propSignal; // 使用 camelCase 键名存储 prop Signal
+                    attributesToRemove.push(attrName); // 仍然移除原始的 HTML 属性
 
                 } else if (attrName.startsWith('@')) { // 事件监听器
                     const eventName = attrName.substring(1);
@@ -262,9 +271,11 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = '根�
                     };
                     attributesToRemove.push(attrName);
 
-                } else { // 静态 Prop
+                } else {
+                    // 静态 Prop
+                    const propName = kebabToCamel(attrName);
                     console.log(`[${parentComponentName}] 解析静态 Prop ${attrName}="${attrValue}"`);
-                    initialProps[attrName] = attrValue;
+                    initialProps[propName] = attrValue;
                     attributesToRemove.push(attrName);
                 }
             }
