@@ -4,25 +4,51 @@ const NueCoreConfig = {
     appVersion: null, // 应用版本号，用于缓存控制
 };
 
-// Signal 核心实现 (响应式数据单元)
-let currentEffect = null; // 当前正在执行的副作用函数
+// 全局变量，用于追踪当前正在执行的 effect 函数
+let currentEffect = null;
 
+/**
+ * 创建一个响应式数据单元 (Signal)。
+ * @param {*} initialValue - Signal 的初始值。
+ * @returns {Function} 一个访问器函数。
+ *                     调用时不带参数则获取值。
+ *                     调用时带参数则设置值，并触发所有订阅此 Signal 的 effect。
+ */
 function createSignal(initialValue) {
-    let value = initialValue; // 信号的内部值
-    const subscribers = new Set(); // 订阅此信号的副作用函数集合
+    let value = initialValue;
+    // 存储订阅此信号的 effect 函数实例。
+    // effect 实例自身会持有对这个 Set 的引用，以便在清理时从中移除自己。
+    const subscribers = new Set();
 
-    // 信号访问器函数
     function signalAccessor(newValue) {
-        if (arguments.length === 0) { // 获取值
-            if (currentEffect) { // 如果在副作用函数中被调用，则建立依赖关系
+        if (arguments.length === 0) {
+            // 获取值
+            if (currentEffect && currentEffect.isActive) {
+                // 确保 effect 处于活动状态
+                // 订阅：将当前 effect 添加到订阅者列表
                 subscribers.add(currentEffect);
+                // effect 也需要记录它订阅了哪些 signal 的 subscribers 集合，以便清理
+                // currentEffect.dependencies 是在 createEffect 中定义的 Set
+                currentEffect.dependencies.add(subscribers);
             }
             return value;
-        } else { // 设置值
-            if (value !== newValue) { // 仅当值发生变化时才更新并通知订阅者
+        } else {
+            // 设置值
+            if (value !== newValue) {
                 value = newValue;
                 // 复制订阅者集合进行迭代，以防在通知过程中集合被修改
-                [...subscribers].forEach((effect) => effect());
+                // （例如，某个 effect 在执行时又修改了其他 signal，导致 subscribers 变化）
+                // 或者某个 effect 在执行时被清理掉。
+                const effectsToRun = new Set(subscribers); // 创建副本
+                effectsToRun.forEach((effectInstance) => {
+                    // 确保 effect 仍然存在且处于活动状态
+                    if (effectInstance && typeof effectInstance === "function" && effectInstance.isActive) {
+                        effectInstance(); // 执行 effect 函数
+                    } else if (!effectInstance.isActive) {
+                        // 如果 effect 不再活动，从订阅者中移除 (可选的自动清理)
+                        // subscribers.delete(effectInstance);
+                    }
+                });
             }
             return newValue; // 返回新设置的值
         }
@@ -30,17 +56,126 @@ function createSignal(initialValue) {
     return signalAccessor;
 }
 
-// 创建副作用函数 (用于自动响应 Signal 变化)
+/**
+ * 创建一个副作用函数 (Effect)，它会自动追踪其依赖的 Signal，
+ * 并在这些 Signal 变化时重新执行。
+ * @param {Function} fn - 包含响应式依赖的函数。
+ * @returns {Function} 一个清理函数。调用此函数将停止 effect 的执行并清除其所有依赖。
+ */
 function createEffect(fn) {
+    // effect 函数实例，它会被 Signal 订阅
     const effect = () => {
-        currentEffect = effect; // 设置当前副作用函数
+        if (!effect.isActive) {
+            // 如果 effect 已被清理，则不执行
+            return;
+        }
+
+        // 在执行用户传入的 fn 之前，清理此 effect 上一次运行时建立的所有依赖关系。
+        // 这样可以确保依赖关系总是最新的，避免过时依赖。
+        cleanupEffectDependencies(effect);
+
+        // 设置全局的 currentEffect 为当前 effect 实例
+        currentEffect = effect;
+        // 初始化/重置当前 effect 的依赖集合 (存储的是 Signal 的 subscribers Set)
+        effect.dependencies = new Set();
+
         try {
-            fn(); // 执行副作用函数体
+            fn(); // 执行用户传入的函数。在此期间，任何被访问的 Signal 都会将此 effect 添加到它们的 subscribers 中。
+        } catch (error) {
+            console.error("Error executing effect:", error);
         } finally {
-            currentEffect = null; // 清理当前副作用函数
+            currentEffect = null; // 清理全局的 currentEffect
         }
     };
-    effect(); // 立即执行一次以建立初始依赖
+
+    // 给 effect 函数实例添加属性
+    effect.isActive = true; // 标记 effect 是否处于活动状态
+    effect.dependencies = new Set(); // 存储此 effect 依赖的所有 Signal 的 subscribers 集合
+
+    // 内部函数，用于清理 effect 的所有依赖
+    function cleanupEffectDependencies(effectInstance) {
+        if (effectInstance.dependencies) {
+            effectInstance.dependencies.forEach((signalSubscribersSet) => {
+                // 从每个它曾订阅的 Signal 的 subscribers 集合中移除此 effect
+                signalSubscribersSet.delete(effectInstance);
+            });
+            effectInstance.dependencies.clear(); // 清空 effect 自身的依赖记录
+        }
+    }
+
+    // 首次立即执行 effect 以建立初始依赖
+    try {
+        effect();
+    } catch (e) {
+        console.error("Error during initial effect execution:", e);
+    }
+
+    // 返回一个清理函数
+    const stopEffect = () => {
+        if (effect.isActive) {
+            cleanupEffectDependencies(effect); // 清理所有依赖
+            effect.isActive = false; // 标记为非活动状态，阻止后续执行
+            // console.log("Effect stopped and cleaned up."); // 调试信息
+        }
+    };
+
+    return stopEffect;
+}
+
+/**
+ * 监听一个 Signal 的变化，并在其值改变时执行回调函数。
+ * @param {Function} signalToWatch - 由 createSignal 创建的响应式变量的访问器函数。
+ * @param {Function} callback - 当 signalToWatch 的值变化时执行的回调函数。
+ *                               接收两个参数: (newValue, oldValue)。
+ * @param {object} [options] - 可选配置对象。
+ * @param {boolean} [options.immediate=false] - 如果为 true，回调函数会在 watch 创建时立即执行一次（通过微任务）。
+ *                                              此时，回调函数中的 oldValue 参数将是 undefined。
+ * @returns {Function} 一个停止监听的函数。调用此函数将取消 watch。
+ */
+function createWatch(signalToWatch, callback, options = {}) {
+    const { immediate = false } = options;
+
+    let oldValue;
+    let isInitialized = false;
+    let pendingCallback = false; // 新增：防止微任务重复调度
+
+    // 内部函数，用于安全地调度并执行回调
+    const scheduleCallback = (newValue, oldValueForCallback) => {
+        if (pendingCallback) return; // 如果已有回调在微任务队列中，则不再添加
+        pendingCallback = true;
+        queueMicrotask(() => { // 使用 queueMicrotask 延迟执行
+            try {
+                callback(newValue, oldValueForCallback);
+            } catch (e) {
+                console.error("Watch callback execution failed:", e);
+            } finally {
+                pendingCallback = false; // 执行完毕，允许下一次调度
+            }
+        });
+    };
+
+    const stop = createEffect(() => {
+        const newValue = signalToWatch();
+
+        if (!isInitialized) {
+            oldValue = newValue;
+            isInitialized = true;
+            if (immediate) {
+                // 立即执行选项：将首次回调放入微任务队列
+                scheduleCallback(newValue, undefined);
+            }
+            return;
+        }
+
+        if (newValue !== oldValue) {
+            // 值变化时：将回调放入微任务队列
+            const previousOldValue = oldValue; // 捕获当前的 oldValue
+            oldValue = newValue; // 更新 oldValue 以供下次比较
+            scheduleCallback(newValue, previousOldValue); // 传递捕获的旧值
+        }
+    });
+
+    return stop;
 }
 
 // 组件及模块相关缓存与注册表
@@ -56,13 +191,13 @@ const njsModuleExecutionCache = new Map(); // 中文注释：NJS模块执行结�
 const _pendingNjsModuleLoads = new Map(); // 中文注释：进行中的NJS模块加载请求
 // --- 结束新增 NJS 模块缓存 ---
 
-
 // 辅助函数
 const LOCAL_STORAGE_PREFIX = "nue_component_cache_"; // localStorage 键前缀
 
 // 从 localStorage 获取缓存的组件/NJS文件文本
 function getComponentFromLocalStorage(versionedUrl) {
-    if (!NueCoreConfig.appVersion) { // 未设置版本号则不使用 localStorage
+    if (!NueCoreConfig.appVersion) {
+        // 未设置版本号则不使用 localStorage
         return null;
     }
     const cacheKey = LOCAL_STORAGE_PREFIX + versionedUrl;
@@ -82,7 +217,9 @@ function getComponentFromLocalStorage(versionedUrl) {
         console.warn(`核心警告：从 localStorage 读取资源 ${versionedUrl} 失败:`, e);
         try {
             localStorage.removeItem(cacheKey); // 尝试移除损坏的缓存项
-        } catch (removeError) { /* 忽略移除错误 */ }
+        } catch (removeError) {
+            /* 忽略移除错误 */
+        }
         return null;
     }
     return null;
@@ -90,7 +227,8 @@ function getComponentFromLocalStorage(versionedUrl) {
 
 // 将组件/NJS文件文本存入 localStorage
 function setComponentToLocalStorage(versionedUrl, text) {
-    if (!NueCoreConfig.appVersion) { // 未设置版本号则不存入 localStorage
+    if (!NueCoreConfig.appVersion) {
+        // 未设置版本号则不存入 localStorage
         return;
     }
     const cacheKey = LOCAL_STORAGE_PREFIX + versionedUrl;
@@ -100,7 +238,8 @@ function setComponentToLocalStorage(versionedUrl, text) {
     });
     try {
         localStorage.setItem(cacheKey, itemToStore);
-    } catch (e) { // 捕获 localStorage 写满等错误
+    } catch (e) {
+        // 捕获 localStorage 写满等错误
         console.warn(`核心警告：存入 localStorage 资源 ${versionedUrl} 失败 (可能已满):`, e);
     }
 }
@@ -117,12 +256,14 @@ function cleanupOldLocalStorageCache() {
                     const item = localStorage.getItem(key);
                     if (item) {
                         const { version } = JSON.parse(item);
-                        if (version !== NueCoreConfig.appVersion) { // 版本不符则移除
+                        if (version !== NueCoreConfig.appVersion) {
+                            // 版本不符则移除
                             localStorage.removeItem(key);
                             i--; // localStorage.length 会变化，调整索引
                         }
                     }
-                } catch (e) { // 解析错误或项不存在，也移除
+                } catch (e) {
+                    // 解析错误或项不存在，也移除
                     localStorage.removeItem(key);
                     i--;
                 }
@@ -141,7 +282,8 @@ function resolveUrl(relativeOrAbsoluteUrl, baseComponentUrl) {
     }
     // 如果是以 / 开头的绝对路径 (相对于域名根)
     if (relativeOrAbsoluteUrl.startsWith("/")) {
-        if (!relativeOrAbsoluteUrl.startsWith("//")) { // 确保不是 // 开头的协议相对 URL
+        if (!relativeOrAbsoluteUrl.startsWith("//")) {
+            // 确保不是 // 开头的协议相对 URL
             return new URL(relativeOrAbsoluteUrl, window.location.origin).href;
         }
     }
@@ -159,7 +301,8 @@ function resolveUrl(relativeOrAbsoluteUrl, baseComponentUrl) {
 function getVersionedAndOriginalUrls(rawUrl, baseComponentUrlForResolution) {
     const originalAbsoluteUrl = resolveUrl(rawUrl, baseComponentUrlForResolution);
     let versionedUrl = originalAbsoluteUrl;
-    if (NueCoreConfig.appVersion) { // 如果设置了应用版本号，则添加版本参数
+    if (NueCoreConfig.appVersion) {
+        // 如果设置了应用版本号，则添加版本参数
         try {
             const urlObj = new URL(originalAbsoluteUrl);
             urlObj.searchParams.set("v", NueCoreConfig.appVersion);
@@ -175,7 +318,8 @@ function getVersionedAndOriginalUrls(rawUrl, baseComponentUrlForResolution) {
 // 解析 .nue 文件结构 (template, script, style)
 function parseComponentStructure(text, versionedUrl) {
     const cached = componentCache.get(versionedUrl);
-    if (cached && cached.structure) { // 优先从内存缓存获取
+    if (cached && cached.structure) {
+        // 优先从内存缓存获取
         return cached.structure;
     }
 
@@ -191,13 +335,14 @@ function parseComponentStructure(text, versionedUrl) {
             const lastTemplateEndTag = text.lastIndexOf("</template>");
             if (lastTemplateEndTag !== -1 && lastTemplateEndTag > firstTemplateStartTagEnd) {
                 template = text.substring(firstTemplateStartTagEnd + 1, lastTemplateEndTag).trim();
-            } else { // 回退到正则匹配 (容错)
+            } else {
+                // 回退到正则匹配 (容错)
                 const templateMatchFallback = text.match(/<template\b[^>]*>([\s\S]*?)<\/template\s*>/i);
                 template = templateMatchFallback ? templateMatchFallback[1].trim() : "";
             }
         }
     }
-    
+
     // 解析 <script>
     const scriptMatch = text.match(/<script\b[^>]*>([\s\S]*?)<\/script\s*>/i);
     script = scriptMatch ? scriptMatch[1].trim() : "";
@@ -207,7 +352,8 @@ function parseComponentStructure(text, versionedUrl) {
     style = styleMatch ? styleMatch[1].trim() : "";
 
     const structure = { template, script, style };
-    if (cached) { // 存入内存缓存
+    if (cached) {
+        // 存入内存缓存
         cached.structure = structure;
     }
     return structure;
@@ -216,7 +362,8 @@ function parseComponentStructure(text, versionedUrl) {
 // 使用 Acorn 解析脚本内容为 AST
 function parseScriptWithAcorn(scriptContent, versionedUrl) {
     const cached = componentCache.get(versionedUrl);
-    if (cached && cached.ast) { // 优先从内存缓存获取
+    if (cached && cached.ast) {
+        // 优先从内存缓存获取
         return cached.ast;
     }
     if (!window.acorn) {
@@ -229,7 +376,8 @@ function parseScriptWithAcorn(scriptContent, versionedUrl) {
             sourceType: "module", // 假设脚本是模块类型
             allowReturnOutsideFunction: true, // 允许在顶层使用 return (Nue 组件和 NJS 需要)
         });
-        if (cached) { // 存入内存缓存
+        if (cached) {
+            // 存入内存缓存
             cached.ast = ast;
         }
         return ast;
@@ -265,10 +413,10 @@ function _executeNjsScript(scriptContent, njsVersionedUrl, njsOriginalUrl) {
         // 将脚本内容包裹在异步立即执行函数表达式 (Async IIFE) 中
         // 这样脚本内部就可以使用顶层 await
         // Function 构造器执行后会返回这个 Async IIFE 的 Promise
-        const njsFunction = new Function('importNjs', `return (async () => { ${scriptContent} })();`);
+        const njsFunction = new Function("importNjs", `return (async () => { ${scriptContent} })();`);
         // 调用构造出来的函数，并传入绑定的 importNjs 实现。
         const resultPromise = njsFunction(boundImportNjs);
-        
+
         return resultPromise; // 返回由 Async IIFE 产生的 Promise
     } catch (error) {
         // 捕获 Function 构造器本身的同步错误（例如，如果脚本内容导致构造阶段的语法错误）
@@ -308,12 +456,12 @@ async function _loadAndExecuteNjsModule(relativePath, baseOriginalUrl) {
         try {
             // 3.1 加载 NJS 文件的文本内容 (复用组件加载逻辑，支持 localStorage 缓存)。
             const scriptText = await fetchAndCacheComponentText(versionedUrl, originalUrl);
-            
+
             // 3.2 执行 NJS 脚本。_executeNjsScript 返回一个 Promise。
             const executionResultPromise = _executeNjsScript(scriptText, versionedUrl, originalUrl);
             // 等待 NJS 脚本的 Async IIFE 完成 (脚本内部可能也有 await)。
-            const finalModuleData = await executionResultPromise; 
-            
+            const finalModuleData = await executionResultPromise;
+
             // 3.3 将最终获取到的模块数据存入 njsModuleExecutionCache 缓存。
             njsModuleExecutionCache.set(versionedUrl, finalModuleData);
             return finalModuleData;
@@ -321,7 +469,7 @@ async function _loadAndExecuteNjsModule(relativePath, baseOriginalUrl) {
             // 错误已在 _executeNjsScript 或 fetchAndCacheComponentText 中打印。
             // 这里再次抛出，以便调用 importNjs 的地方可以通过 .catch() 或 try-catch 来处理。
             console.error(`核心错误：NJS 模块 ${originalUrl} (版本化 URL: ${versionedUrl}) 的加载或执行流程失败。`);
-            throw error; 
+            throw error;
         }
     })();
 
@@ -357,13 +505,13 @@ async function executeScript(scriptContent, ast, initialProps = {}, emit = () =>
 
         // 准备传递给 Function 构造器的参数名列表和对应的参数值。
         // 新增了 'importNjs'。
-        const scriptArgNames = ["createSignal", "props", "emit", "importNjs"];
-        const scriptArgValues = [createSignal, initialProps, emit, boundImportNjsForNue];
-        
+        const scriptArgNames = ["createSignal", "createWatch", "props", "emit", "importNjs"];
+        const scriptArgValues = [createSignal, createWatch, initialProps, emit, boundImportNjsForNue];
+
         // 将脚本内容包裹在异步立即执行函数表达式 (Async IIFE) 中，以支持顶层 await
         const wrappedScriptContent = `return (async () => { ${scriptContent} })();`;
         const scriptFunction = new Function(...scriptArgNames, wrappedScriptContent);
-        
+
         // 执行脚本函数，并等待其 Promise 完成
         // scriptFunction(...) 返回的是 Async IIFE 的 Promise
         const componentScopePromise = scriptFunction(...scriptArgValues);
@@ -410,7 +558,8 @@ async function fetchAndCacheComponentText(versionedUrl, originalAbsoluteUrl) {
     // 尝试从 localStorage 获取
     const localStorageText = getComponentFromLocalStorage(versionedUrl);
     if (localStorageText !== null) {
-        if (!componentCache.has(versionedUrl)) { // 更新内存缓存
+        if (!componentCache.has(versionedUrl)) {
+            // 更新内存缓存
             componentCache.set(versionedUrl, { text: localStorageText, structure: null, ast: null, originalUrl: originalAbsoluteUrl });
         } else {
             componentCache.get(versionedUrl).text = localStorageText;
@@ -482,17 +631,20 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                 const attrName = attr.name;
                 const attrValue = attr.value;
 
-                if (attrName === "src") { // src 已用于路径，应移除
+                if (attrName === "src") {
+                    // src 已用于路径，应移除
                     attributesToRemove.push(attrName);
                     continue;
                 }
 
-                if (attrName.startsWith(":")) { // 动态 prop
+                if (attrName.startsWith(":")) {
+                    // 动态 prop
                     const rawPropName = attrName.substring(1);
                     const camelCasePropName = kebabToCamel(rawPropName);
                     const expression = attrValue;
                     const propSignal = createSignal(undefined); // 为动态 prop 创建 signal
-                    createEffect(() => { // 监听表达式变化并更新 propSignal
+                    createEffect(() => {
+                        // 监听表达式变化并更新 propSignal
                         try {
                             propSignal(directiveHandlers.evaluateExpression(expression, scope));
                         } catch (error) {
@@ -502,10 +654,12 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                     });
                     initialProps[camelCasePropName] = propSignal;
                     attributesToRemove.push(attrName);
-                } else if (attrName.startsWith("@")) { // 事件绑定
+                } else if (attrName.startsWith("@")) {
+                    // 事件绑定
                     const eventName = attrName.substring(1);
                     const handlerExpression = attrValue;
-                    eventHandlers[eventName] = (payload) => { // 创建事件处理器
+                    eventHandlers[eventName] = (payload) => {
+                        // 创建事件处理器
                         try {
                             const context = Object.create(scope);
                             context.$event = payload; // 将 $event 注入事件处理上下文
@@ -519,7 +673,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                         }
                     };
                     attributesToRemove.push(attrName);
-                } else { // 静态 prop
+                } else {
+                    // 静态 prop
                     initialProps[kebabToCamel(attrName)] = attrValue;
                 }
             }
@@ -531,16 +686,18 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             tempChildNodes.forEach((cn) => slotContentContainer.appendChild(cn)); // 移到临时容器
 
             const rawSlotContents = { default: [] }; // 存储原始插槽节点
-            Array.from(slotContentContainer.childNodes).forEach((childNode) => { // 区分具名和默认插槽
+            Array.from(slotContentContainer.childNodes).forEach((childNode) => {
+                // 区分具名和默认插槽
                 if (childNode.nodeType === Node.ELEMENT_NODE && childNode.tagName.toLowerCase() === "template") {
                     if (childNode.hasAttribute("slot")) {
                         let slotNameAttr = (childNode.getAttribute("slot") || "").trim();
                         if (!slotNameAttr) slotNameAttr = "default"; // 空 slot 名视为默认
-                        
+
                         if (!rawSlotContents[slotNameAttr]) rawSlotContents[slotNameAttr] = [];
                         const templateContent = childNode.content; // <template> 的 DocumentFragment 内容
                         if (templateContent) Array.from(templateContent.childNodes).forEach((c) => rawSlotContents[slotNameAttr].push(c.cloneNode(true)));
-                    } else { // 无 slot 属性的 <template> 内容也视为默认插槽
+                    } else {
+                        // 无 slot 属性的 <template> 内容也视为默认插槽
                         const templateContent = childNode.content;
                         if (templateContent) Array.from(templateContent.childNodes).forEach((c) => rawSlotContents.default.push(c.cloneNode(true)));
                     }
@@ -572,13 +729,13 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
 
             // 异步挂载子组件
             mountComponent(
-                childVersionedUrl,    // 使用版本化 URL
-                placeholder,          // 挂载目标是占位符
+                childVersionedUrl, // 使用版本化 URL
+                placeholder, // 挂载目标是占位符
                 initialProps,
                 eventHandlers,
-                tagName,              // 组件名提示
+                tagName, // 组件名提示
                 parsedSlots,
-                childOriginalUrl      // 子组件的原始 URL，用于其内部路径解析
+                childOriginalUrl, // 子组件的原始 URL，用于其内部路径解析
             ).catch((error) => console.error(`核心错误：[${parentComponentName}] 异步挂载子组件 <${tagName}> (${childVersionedUrl}) 失败:`, error));
             return; // 子组件已处理
         }
@@ -606,7 +763,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                 if (providedContentFragment && providedContentFragment.childNodes.length > 0) {
                     // 插入父组件提供的已编译内容
                     parentOfSlot.insertBefore(providedContentFragment.cloneNode(true), element);
-                } else { // 渲染 <slot> 标签的后备内容
+                } else {
+                    // 渲染 <slot> 标签的后备内容
                     const fallbackFragment = document.createDocumentFragment();
                     while (element.firstChild) fallbackFragment.appendChild(element.firstChild);
                     // 编译后备内容 (在当前子组件作用域下)
@@ -627,10 +785,12 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
         for (const attr of Array.from(element.attributes)) {
             const attrName = attr.name;
             const attrValue = attr.value;
-            if (attrName.startsWith(":")) { // 动态属性绑定
+            if (attrName.startsWith(":")) {
+                // 动态属性绑定
                 if (directiveHandlers.handleAttributeBinding) directiveHandlers.handleAttributeBinding(element, attrName.substring(1), attrValue, scope, parentComponentName);
                 attributesToRemoveAfterProcessing.push(attrName);
-            } else if (attrName.startsWith("@")) { // DOM 事件绑定
+            } else if (attrName.startsWith("@")) {
+                // DOM 事件绑定
                 const eventName = attrName.substring(1);
                 element.addEventListener(eventName, (event) => {
                     try {
@@ -660,8 +820,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
 
         // 递归编译当前元素的子节点
         Array.from(element.childNodes).forEach((child) => compileNode(child, scope, directiveHandlers, `${parentComponentName} > ${element.tagName.toUpperCase()}`, currentContextOriginalUrl));
-    }
-    else if (node.nodeType === Node.TEXT_NODE) { // 处理文本节点中的插值 {{ ... }}
+    } else if (node.nodeType === Node.TEXT_NODE) {
+        // 处理文本节点中的插值 {{ ... }}
         const textContent = node.textContent || "";
         const mustacheRegex = /\{\{([^}]+)\}\}/g; // 匹配 {{ expression }}
         if (!mustacheRegex.test(textContent)) return; // 无插值则不处理
@@ -670,15 +830,18 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
         let lastIndex = 0;
         let match;
         mustacheRegex.lastIndex = 0; // 重置正则 lastIndex
-        while ((match = mustacheRegex.exec(textContent)) !== null) { // 分割文本
-            if (match.index > lastIndex) { // 表达式前的普通文本
+        while ((match = mustacheRegex.exec(textContent)) !== null) {
+            // 分割文本
+            if (match.index > lastIndex) {
+                // 表达式前的普通文本
                 segments.push(document.createTextNode(textContent.substring(lastIndex, match.index)));
             }
             const expression = match[1].trim(); // 提取表达式
             const placeholderNode = document.createTextNode(""); // 为表达式结果创建占位文本节点
             segments.push(placeholderNode);
 
-            createEffect(() => { // 监听表达式依赖变化并更新占位符
+            createEffect(() => {
+                // 监听表达式依赖变化并更新占位符
                 try {
                     const value = directiveHandlers.evaluateExpression(expression, scope);
                     placeholderNode.textContent = value === undefined || value === null ? "" : String(value);
@@ -689,7 +852,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             });
             lastIndex = mustacheRegex.lastIndex;
         }
-        if (lastIndex < textContent.length) { // 表达式后的剩余普通文本
+        if (lastIndex < textContent.length) {
+            // 表达式后的剩余普通文本
             segments.push(document.createTextNode(textContent.substring(lastIndex)));
         }
 
@@ -717,9 +881,10 @@ function injectStyles(css, originalComponentUrl) {
 // 清理节点及其子孙节点，并执行卸载回调
 function cleanupAndRemoveNode(node) {
     if (!node) return;
-    
+
     if (node.nodeType === Node.ELEMENT_NODE) {
-        if (node.hasChildNodes()) { // 递归清理子节点
+        if (node.hasChildNodes()) {
+            // 递归清理子节点
             Array.from(node.childNodes).forEach((child) => cleanupAndRemoveNode(child));
         }
         // 执行卸载回调 (onUnmount)
@@ -754,7 +919,8 @@ async function _mountComponentInternal(versionedComponentUrl, target, initialPro
     } else if (target instanceof Element || target instanceof Comment) {
         targetElement = target;
         isPlaceholder = target instanceof Comment;
-        if (isPlaceholder && !targetElement.parentNode) { // 占位符已脱离 DOM
+        if (isPlaceholder && !targetElement.parentNode) {
+            // 占位符已脱离 DOM
             console.error(`核心错误：挂载失败，注释占位符已脱离 DOM`);
             return null;
         }
@@ -779,7 +945,8 @@ async function _mountComponentInternal(versionedComponentUrl, target, initialPro
         // 1. 获取组件文本内容
         const componentText = await fetchAndCacheComponentText(versionedComponentUrl, originalAbsoluteUrl);
         let cacheEntry = componentCache.get(versionedComponentUrl);
-        if (!cacheEntry) { // 理论上 fetchAndCacheComponentText 会创建缓存
+        if (!cacheEntry) {
+            // 理论上 fetchAndCacheComponentText 会创建缓存
             console.error(`核心严重错误：组件 ${versionedComponentUrl} 文本已获取，但缓存条目丢失！将尝试重新创建。`);
             cacheEntry = { text: componentText, structure: null, ast: null, originalUrl: originalAbsoluteUrl };
             componentCache.set(versionedComponentUrl, cacheEntry);
@@ -800,14 +967,15 @@ async function _mountComponentInternal(versionedComponentUrl, target, initialPro
         // 4. 执行组件脚本，获取作用域 (executeScript 现在是 async)
         const emit = createEmitFunction(eventHandlers, componentName);
         // 传递 originalAbsoluteUrl 作为组件脚本的基准 URL (用于其内部 importNjs)
-        const componentScope = await executeScript(script, ast, initialProps, emit, originalAbsoluteUrl); 
-        
+        const componentScope = await executeScript(script, ast, initialProps, emit, originalAbsoluteUrl);
+
         // 将解析好的插槽内容 ($slots) 注入到组件作用域
         if (componentScope && typeof componentScope === "object") {
             componentScope.$slots = parsedSlots;
         } else {
-            if (componentScope) { // 确保 componentScope 不是 null/undefined
-                 console.warn(`核心警告：组件 ${componentName} 的脚本未返回有效作用域对象，无法注入 $slots。实际返回:`, componentScope);
+            if (componentScope) {
+                // 确保 componentScope 不是 null/undefined
+                console.warn(`核心警告：组件 ${componentName} 的脚本未返回有效作用域对象，无法注入 $slots。实际返回:`, componentScope);
             }
         }
 
@@ -818,23 +986,25 @@ async function _mountComponentInternal(versionedComponentUrl, target, initialPro
         while (tempDiv.firstChild) fragment.appendChild(tempDiv.firstChild);
 
         const potentialRootElementInFragment = fragment.firstElementChild; // 可能的根元素
-        
+
         // 6. 编译 DOM 片段 (originalAbsoluteUrl 作为当前编译上下文的 URL)
         Array.from(fragment.childNodes).forEach((node) => compileNode(node, componentScope, window.NueDirectives, componentName, originalAbsoluteUrl));
-        
+
         // 7. 注入组件样式
         injectStyles(style, originalAbsoluteUrl);
 
         // 8. 挂载到目标位置
         let mountedRootElement = null;
-        if (isPlaceholder) { // 目标是注释占位符
+        if (isPlaceholder) {
+            // 目标是注释占位符
             const parent = targetElement.parentNode;
             if (parent) {
                 parent.insertBefore(fragment, targetElement);
                 mountedRootElement = potentialRootElementInFragment;
                 parent.removeChild(targetElement); // 移除占位符
             }
-        } else { // 目标是普通元素
+        } else {
+            // 目标是普通元素
             cleanupAndRemoveNode(targetElement.firstChild); // 清理旧内容
             targetElement.innerHTML = ""; // 确保清空
             mountedRootElement = fragment.firstElementChild;
@@ -875,14 +1045,15 @@ function mountComponent(
     eventHandlers = {}, // (子组件用) 事件处理器
     componentNameSuggestion, // (子组件用) 组件名提示
     parsedSlots = {}, // (子组件用) 已编译插槽
-    baseResolutionUrlOverride // (子组件用) 路径解析基准 URL
+    baseResolutionUrlOverride, // (子组件用) 路径解析基准 URL
 ) {
     // 解析组件文件的版本化 URL 和原始绝对 URL
     const { versionedUrl, originalUrl } = getVersionedAndOriginalUrls(componentFile, baseResolutionUrlOverride || null);
-    
+
     // 确定组件名
     let finalComponentName = componentNameSuggestion;
-    if (!finalComponentName) { // 通常是根组件
+    if (!finalComponentName) {
+        // 通常是根组件
         const nameParts = originalUrl.substring(originalUrl.lastIndexOf("/") + 1).split(".");
         finalComponentName = nameParts[0] || "组件";
     }
@@ -895,7 +1066,7 @@ function mountComponent(
         eventHandlers,
         finalComponentName,
         parsedSlots,
-        originalUrl // 传递原始绝对 URL
+        originalUrl, // 传递原始绝对 URL
     );
 }
 
