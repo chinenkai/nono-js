@@ -5,7 +5,7 @@
     <!-- 1. 基本计数器 (父组件状态) 与 Watch 示例 -->
     <!-- ======================================== -->
     <div class="container">
-        <h3>父组件计数器 与 Watch 示例</h3>
+        <h3>1. 父组件计数器 与 Watch 示例</h3>
         <p>
             父组件计数值: <strong>{{ count() }}</strong>
         </p>
@@ -16,7 +16,6 @@
         <p>监听 <code>count</code> 值的变化 (非立即执行):</p>
         <ul id="watch-log-count">
             <li n-if="!watchLogCount().length"><em>等待 count 变化...</em></li>
-            <!-- 修复: 使用 log() -->
             <li n-for="log in watchLogCount()">{{ log() }}</li>
         </ul>
 
@@ -25,7 +24,6 @@
         <button @click="anotherCount(anotherCount() + 5)">AnotherCount 加 5</button>
         <ul id="watch-log-another-count">
             <li n-if="!watchLogAnotherCount().length"><em>等待 anotherCount 变化...</em></li>
-            <!-- 修复: 使用 log() -->
             <li n-for="log in watchLogAnotherCount()">{{ log() }}</li>
         </ul>
         <button @click="toggleWatchers" :disabled="!watchersActive()">
@@ -37,7 +35,7 @@
     <!-- 2. 属性绑定 (:attribute) 示例 -->
     <!-- ======================================== -->
     <div class="container">
-        <h3>属性绑定 (:attribute) 示例</h3>
+        <h3>2. 属性绑定 (:attribute) 示例</h3>
         <p :class="{ highlight: isHighlighted(), 'text-large': true }">
             这段文字根据 isHighlighted() 状态动态添加 'highlight' 类。 (对象语法)
         </p>
@@ -67,7 +65,7 @@
     <!-- 3. 双向绑定 (n-model) 示例 -->
     <!-- ======================================== -->
     <div class="container">
-        <h3>双向绑定 (n-model) 示例</h3>
+        <h3>3. 双向绑定 (n-model) 示例</h3>
         <div>
             <label for="text-input">文本输入: </label>
             <input type="text" id="text-input" n-model="textInput">
@@ -107,7 +105,7 @@
     <!-- 4. 条件渲染 (n-if) 与 条件显示 (n-show) -->
     <!-- ======================================== -->
     <div class="container">
-        <h3>条件渲染 (n-if) 与 条件显示 (n-show)</h3>
+        <h3>4. 条件渲染 (n-if) 与 条件显示 (n-show)</h3>
         <button @click="showElement(!showElement())">
             切换显示状态 (当前: {{ showElement() }})
         </button>
@@ -132,7 +130,7 @@
     <!-- 5. 列表渲染 (n-for) 示例 -->
     <!-- ======================================== -->
     <div class="container">
-        <h3>列表渲染 (n-for) 示例</h3>
+        <h3>5. 列表渲染 (n-for) 示例</h3>
         <button @click="addItem()">添加列表项</button>
         <button @click="shuffleItems()">打乱列表项</button>
         <ul>
@@ -151,7 +149,7 @@
     <!-- 6. HTML 内容绑定 (n-html) 示例 -->
     <!-- ======================================== -->
     <div class="container">
-        <h3>HTML 内容绑定 (n-html) 示例</h3>
+        <h3>6. HTML 内容绑定 (n-html) 示例</h3>
         <p>下面的内容由 n-html 渲染 (注意 XSS 风险):</p>
         <div class="html-container" n-html="rawHtmlContent()"></div>
         <button @click="changeHtmlContent()">改变 HTML 内容</button>
@@ -162,12 +160,12 @@
     <!-- 7. 子组件示例 (带插槽) -->
     <!-- ======================================== -->
     <div class="container">
-        <h3>子组件示例 (带插槽)</h3>
+        <h3>7. 子组件示例 (带插槽)</h3>
         <p>要传递给子组件的消息 (动态 Prop): {{ message() }}</p>
         <button @click="changeMessage()">改变父组件消息 (会更新子组件)</button>
         <p>下面是子组件的内容:</p>
         
-        <child-component :message="message()" static-message="这是来自父组件的静态问候" @child-notified="handleChildEvent($event)">
+        <child-component src="./child-component.nue" :message="message()" static-message="这是来自父组件的静态问候" @child-notified="handleChildEvent($event)">
             <p>这是父组件提供的<strong>默认插槽</strong>内容。</p>
             <p>父组件计数器值: <strong>{{ count() }}</strong> (来自父作用域)</p>
             <button @click="count(count() - 1)">父组件按钮 (在默认插槽中)</button>
@@ -188,13 +186,57 @@
     <!-- 8. NJS 模块调用示例 (新增) -->
     <!-- ======================================== -->
     <div class="container">
-        <h3>NJS 模块调用示例 (utils.njs)</h3>
+        <h3>8. NJS 模块调用示例 (utils.njs)</h3>
         <p>应用名称 (来自 utils.njs -> config.njs): <strong>{{ appNameFromUtils() }}</strong></p>
         <p>格式化日期 (来自 utils.njs): <em>{{ formattedDate() }}</em></p>
         <p>问候语 (来自 utils.njs): {{ greeting() }}</p>
         <button @click="loadRemoteData">从 utils.njs 加载远程数据</button>
         <p n-if="remoteData()">远程数据: {{ remoteData()?.data }} (时间戳: {{ remoteData()?.timestamp }})</p>
         <p n-if="isLoadingData()">正在加载数据...</p>
+    </div>
+
+    <!-- ======================================== -->
+    <!-- 9. 路由监测示例 (createUrlWatch) -->
+    <!-- ======================================== -->
+    <div class="container">
+        <h3>9. 路由监测示例 (createUrlWatch)</h3>
+        <p>当前侦测到的完整 URL (来自 NueCore 内部 Signal): <code class="route-code">{{ currentFullUrlForDisplay() }}</code></p>
+        <nav class="route-nav">
+            <a href="#/home-demo">访问 Home Demo</a>
+            <a href="#/profile-demo/user789">访问 Profile Demo (user789)</a>
+            <a href="#/profile-demo/anotherUser">访问 Profile Demo (anotherUser)</a>
+            <a href="#/settings-demo?mode=editor&lang=en">访问 Settings Demo (带参数)</a>
+            <a href="#/settings-demo">访问 Settings Demo (无参数)</a>
+            <a href="#/non-existent-demo-path">访问一个未明确监听的路径</a>
+            <a href="?">清除 Hash 和 Query (返回页面基础路径)</a>
+        </nav>
+
+        <div class="route-status">
+            <h4>Home Demo Status (监听 <code>/#/home-demo$</code>):</h4>
+            <p :class="{ 'matched': homeDemoStatus().isMatched, 'unmatched': !homeDemoStatus().isMatched }">
+                {{ homeDemoStatus().message }}
+            </p>
+        </div>
+
+        <div class="route-status">
+            <h4>Profile Demo Status (监听 <code>/#/profile-demo/([^/?#]+)</code>):</h4>
+            <p :class="{ 'matched': profileDemoStatus().isMatched, 'unmatched': !profileDemoStatus().isMatched }">
+                {{ profileDemoStatus().message }}
+                <span n-if="profileDemoStatus().userId"> (提取的用户 ID: <strong>{{ profileDemoStatus().userId }}</strong>)</span>
+            </p>
+        </div>
+
+        <div class="route-status">
+            <h4>Settings Demo Status (监听 <code>/#/settings-demo(\?.*)?$</code>):</h4>
+            <p :class="{ 'matched': settingsDemoStatus().isMatched, 'unmatched': !settingsDemoStatus().isMatched }">
+                {{ settingsDemoStatus().message }}
+                <span n-if="settingsDemoStatus().queryParams"> (提取的 Query 参数: <strong>{{ settingsDemoStatus().queryParams }}</strong>)</span>
+            </p>
+        </div>
+        <div class="route-status">
+            <h4>通用路由信息 (监听所有变化):</h4>
+            <p>{{ generalRouteInfo() }}</p>
+        </div>
     </div>
 
 </template>
@@ -247,6 +289,18 @@
     const greeting = createSignal('加载中...');
     const remoteData = createSignal(null);
     const isLoadingData = createSignal(false);
+
+    // --- 9. 路由监测状态 ---
+    const currentFullUrlForDisplay = createSignal(window.location.pathname + window.location.search + window.location.hash);
+    const homeDemoStatus = createSignal({ isMatched: false, message: '等待 /#/home-demo 路径...' });
+    const profileDemoStatus = createSignal({ isMatched: false, message: '等待 /#/profile-demo/:id 路径...', userId: null });
+    const settingsDemoStatus = createSignal({ isMatched: false, message: '等待 /#/settings-demo?params 路径...', queryParams: null });
+    const generalRouteInfo = createSignal('等待路由事件...');
+
+    let stopHomeDemoWatch = null;
+    let stopProfileDemoWatch = null;
+    let stopSettingsDemoWatch = null;
+    let stopGeneralUrlWatch = null;
 
 
     // --- 父组件方法 ---
@@ -322,7 +376,8 @@
             const utils = await importNjs('./utils.njs');
             const data = await utils.fetchData('userProfile');
             remoteData(data);
-        } catch (err) {
+        } catch (err)
+        {
             console.error("Demo.nue: 加载远程数据失败", err);
             remoteData({ data: "加载失败: " + err.message, timestamp: Date.now() });
         } finally {
@@ -335,64 +390,97 @@
         console.log('父组件 (demo.nue) 已挂载 (onMount)!');
 
         // --- Watch 示例初始化 ---
-        // 确保仅在 watcher 应该活动时才创建
         if (watchersActive()) {
-            console.log("Initializing watchers..."); // 添加日志确认初始化
-
+            console.log("Initializing watchers for count and anotherCount...");
             stopWatchCount = createWatch(count, (newValue, oldValue) => {
                 const logMessage = `Watch 'count': 从 ${oldValue} 变为 ${newValue} (时间: ${new Date().toLocaleTimeString()})`;
-                console.log(logMessage);
-                const currentLogs = watchLogCount();
-                watchLogCount([...currentLogs, logMessage]);
+                watchLogCount([...watchLogCount(), logMessage]);
             });
-
             stopWatchAnotherCount = createWatch(anotherCount, (newValue, oldValue) => {
                 const logMessage = `Watch 'anotherCount': 从 ${oldValue === undefined ? 'undefined (首次)' : oldValue} 变为 ${newValue} (时间: ${new Date().toLocaleTimeString()})`;
-                console.log(logMessage);
-                const currentLogs = watchLogAnotherCount();
-                // 确保不会无限添加日志
-                // 检查是否与最后一条日志相同（简单检查，可能不够鲁棒）
-                if (currentLogs.length === 0 || currentLogs[currentLogs.length - 1] !== logMessage) {
-                     watchLogAnotherCount([...currentLogs, logMessage]);
-                } else {
-                    console.warn("Duplicate log message prevented for anotherCount watch:", logMessage);
-                }
+                watchLogAnotherCount([...watchLogAnotherCount(), logMessage]);
             }, { immediate: true });
         }
 
-        // --- 原有的 onMount NJS 加载内容 ---
+        // --- NJS 加载 ---
         try {
             console.log('Demo.nue: 正在加载 utils.njs...');
             const utils = await importNjs('./utils.njs'); 
-            console.log('Demo.nue: utils.njs 加载完成!', utils);
             appNameFromUtils(utils.appNameFromConfig);
             formattedDate(utils.formatDate(new Date()));
             greeting(utils.greet('演示用户'));
-            console.log('Demo.nue: 尝试再次加载 utils.njs...');
-            const utilsAgain = await importNjs('./utils.njs');
-            console.log('Demo.nue: utils.njs 再次加载完成 (应来自缓存)', utilsAgain);
-            console.log('Demo.nue: 两次加载的 utils 是否为同一对象?', utils === utilsAgain);
         } catch (err) {
             console.error("Demo.nue: 加载 utils.njs 失败", err);
-            appNameFromUtils('错误');
-            formattedDate('错误');
-            greeting('错误');
+            appNameFromUtils('错误'); formattedDate('错误'); greeting('错误');
         }
+
+        // --- 路由监测初始化 (createUrlWatch) ---
+        console.log("Initializing URL watchers...");
+
+        // 1. 通用 URL 显示监听器
+        stopGeneralUrlWatch = NueCore.createUrlWatch(/.*/, // 匹配任何 URL 变化
+            (url) => {
+                currentFullUrlForDisplay(url); // 更新 Signal 以在模板中显示
+                generalRouteInfo(`当前侦测到的 URL: ${url}`);
+                console.log('[Router Demo] General Watch - URL changed to:', url);
+            },
+            () => {} // onUnmatch 通常对这种通用监听器不重要
+        );
+
+        // 2. Home Demo 路由监听
+        stopHomeDemoWatch = NueCore.createUrlWatch(/#\/home-demo$/,
+            (matchedUrl) => {
+                homeDemoStatus({ isMatched: true, message: `成功匹配到 Home Demo 路径: ${matchedUrl}` });
+                console.log('[Router Demo] Home Matched:', matchedUrl);
+            },
+            (newUrl) => {
+                homeDemoStatus({ isMatched: false, message: `已离开 Home Demo 路径。当前 URL: ${newUrl}` });
+                console.log('[Router Demo] Home Unmatched. New URL:', newUrl);
+            }
+        );
+
+        // 3. Profile Demo 路由监听 (带参数提取)
+        stopProfileDemoWatch = NueCore.createUrlWatch(/#\/profile-demo\/([^/?#]+)/,
+            (matchedUrl) => {
+                const match = matchedUrl.match(/#\/profile-demo\/([^/?#]+)/);
+                const userId = match ? match[1] : '未知';
+                profileDemoStatus({ isMatched: true, message: `成功匹配到 Profile Demo 路径: ${matchedUrl}`, userId: userId });
+                console.log('[Router Demo] Profile Matched:', matchedUrl, 'User ID:', userId);
+            },
+            (newUrl) => {
+                profileDemoStatus({ isMatched: false, message: `已离开 Profile Demo 路径。当前 URL: ${newUrl}`, userId: null });
+                console.log('[Router Demo] Profile Unmatched. New URL:', newUrl);
+            }
+        );
+
+        // 4. Settings Demo 路由监听 (带查询参数提取)
+        stopSettingsDemoWatch = NueCore.createUrlWatch(/#\/settings-demo(\?.*)?$/,
+            (matchedUrl) => {
+                const match = matchedUrl.match(/#\/settings-demo(\?(.*))?$/);
+                const queryParams = match && match[2] ? match[2] : '(无参数)';
+                settingsDemoStatus({ isMatched: true, message: `成功匹配到 Settings Demo 路径: ${matchedUrl}`, queryParams: queryParams });
+                console.log('[Router Demo] Settings Matched:', matchedUrl, 'Query:', queryParams);
+            },
+            (newUrl) => {
+                settingsDemoStatus({ isMatched: false, message: `已离开 Settings Demo 路径。当前 URL: ${newUrl}`, queryParams: null });
+                console.log('[Router Demo] Settings Unmatched. New URL:', newUrl);
+            }
+        );
     };
 
     const onUnmount = () => {
         console.log('父组件 (demo.nue) 即将卸载 (onUnmount)!');
-        if (stopWatchCount) {
-            stopWatchCount();
-            console.log("Watcher for 'count' stopped on unmount.");
-            stopWatchCount = null; // 清理引用
-        }
-        if (stopWatchAnotherCount) {
-            stopWatchAnotherCount();
-            console.log("Watcher for 'anotherCount' stopped on unmount.");
-            stopWatchAnotherCount = null; // 清理引用
-        }
-        watchersActive(false);
+        // 清理 Watcher
+        if (stopWatchCount) stopWatchCount();
+        if (stopWatchAnotherCount) stopWatchAnotherCount();
+        watchersActive(false); // 标记 Watcher 已停止
+
+        // 清理路由 Watcher
+        if (stopGeneralUrlWatch) stopGeneralUrlWatch();
+        if (stopHomeDemoWatch) stopHomeDemoWatch();
+        if (stopProfileDemoWatch) stopProfileDemoWatch();
+        if (stopSettingsDemoWatch) stopSettingsDemoWatch();
+        console.log("All URL watchers stopped on unmount.");
     };
 
     return {
@@ -405,6 +493,8 @@
         items, addItem, removeItem, shuffleItems,
         rawHtmlContent, changeHtmlContent,
         appNameFromUtils, formattedDate, greeting, remoteData, isLoadingData, loadRemoteData,
+        // 暴露路由相关的 Signals
+        currentFullUrlForDisplay, homeDemoStatus, profileDemoStatus, settingsDemoStatus, generalRouteInfo,
         onMount, onUnmount
     };
 </script>
@@ -467,13 +557,13 @@ ul {
     list-style-type: disc;
 }
 li {
-    margin-bottom: 8px; /* 稍微减小列表项间距 */
+    margin-bottom: 8px;
     padding-bottom: 8px;
     border-bottom: 1px dotted #eee;
 }
 li:last-child {
     border-bottom: none;
-    margin-bottom: 0; /* 最后一项无下外边距 */
+    margin-bottom: 0;
 }
 li button {
     padding: 3px 8px;
@@ -518,38 +608,92 @@ code {
 /* Watch 日志列表样式 */
 #watch-log-count, #watch-log-another-count {
     list-style-type: none;
-    padding: 10px; /* 内边距 */
-    margin: 5px 0 15px 0; /* 上下外边距 */
+    padding: 10px;
+    margin: 5px 0 15px 0;
     max-height: 150px;
     overflow-y: auto;
     background-color: #f9f9f9;
     border: 1px solid #eee;
     border-radius: 4px;
     font-size: 0.9em;
+    padding-left: 10px;
 }
-/* 移除 ul 默认的左侧 padding */
-#watch-log-count, #watch-log-another-count {
-    padding-left: 10px; /* 只保留左侧内边距 */
-}
-
-/* 列表项样式 */
 #watch-log-count li, #watch-log-another-count li {
-    padding: 4px 0; /* 增加一点垂直内边距 */
-    margin-bottom: 4px; /* 列表项之间的间距 */
+    padding: 4px 0;
+    margin-bottom: 4px;
     border-bottom: 1px dotted #ddd;
-    line-height: 1.4; /* 调整行高 */
+    line-height: 1.4;
 }
-/* 后备内容样式 */
 #watch-log-count li[n-if], #watch-log-another-count li[n-if] {
     color: gray;
     font-style: italic;
-    border-bottom: none; /* 后备内容无分隔线 */
+    border-bottom: none;
 }
-/* 移除最后一个实际日志项的下边框和下外边距 */
 #watch-log-count li:not([n-if]):last-child,
 #watch-log-another-count li:not([n-if]):last-child {
     border-bottom: none;
     margin-bottom: 0;
+}
+
+/* --- 路由演示区特定样式 --- */
+.route-nav {
+    margin-bottom: 20px;
+    padding-bottom: 15px;
+    border-bottom: 1px dashed #ccc;
+}
+.route-nav a {
+    margin-right: 12px;
+    text-decoration: none;
+    color: #0056b3; /* 深蓝色 */
+    font-weight: 500;
+    padding: 5px 8px;
+    border-radius: 3px;
+    transition: background-color 0.2s, color 0.2s;
+}
+.route-nav a:hover {
+    text-decoration: none;
+    background-color: #e9ecef;
+    color: #003d80;
+}
+.route-status {
+    margin-top: 15px;
+    padding: 12px;
+    border: 1px solid #e0e0e0;
+    border-radius: 4px;
+    background-color: #fdfdfd;
+}
+.route-status h4 {
+    margin-top: 0;
+    margin-bottom: 8px;
+    font-size: 1em;
+    color: #444;
+    font-weight: 600;
+}
+.route-status p {
+    margin: 0;
+    font-size: 0.95em;
+    line-height: 1.5;
+}
+.route-status .matched {
+    color: #28a745; /* 绿色 */
+    font-weight: bold;
+}
+.route-status .unmatched {
+    color: #dc3545; /* 红色 */
+}
+.route-status strong { /* 用于高亮提取的参数 */
+    color: #007bff; /* 蓝色 */
+    background-color: #e7f3ff;
+    padding: 1px 3px;
+    border-radius: 2px;
+}
+.route-code { /* 用于显示当前 URL */
+    font-size: 0.9em;
+    color: #555;
+    word-break: break-all;
+    background-color: #eef;
+    padding: 2px 5px;
+    border-radius: 3px;
 }
 
 </style>

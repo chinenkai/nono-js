@@ -141,7 +141,6 @@ function createEffect(fn) {
     return stopEffect;
 }
 
-
 /**
  * 监听一个 Signal 的变化，并在其值改变时执行回调函数。
  * @param {Function} signalToWatch - 由 createSignal 创建的响应式变量的访问器函数。
@@ -161,7 +160,8 @@ function createWatch(signalToWatch, callback, options = {}) {
     const scheduleCallback = (newValue, oldValueForCallback) => {
         if (pendingCallback) return; // 如果已有回调在微任务队列中，则不再添加
         pendingCallback = true;
-        queueMicrotask(() => { // 使用 queueMicrotask 延迟执行
+        queueMicrotask(() => {
+            // 使用 queueMicrotask 延迟执行
             try {
                 callback(newValue, oldValueForCallback);
             } catch (e) {
@@ -195,6 +195,161 @@ function createWatch(signalToWatch, callback, options = {}) {
 
     return stop;
 }
+
+// === 路由功能开始 ===
+
+// 辅助函数：获取当前浏览器地址的相关部分 (pathname + search + hash)
+function _getCurrentLocationString() {
+    return window.location.pathname + window.location.search + window.location.hash;
+}
+
+// 全局 Signal，用于存储和响应当前 URL 字符串的变化
+// 它在 NueCore 对象定义之前声明，因为它会被 createUrlWatch 和事件监听器使用
+const _currentUrlSignal = createSignal(_getCurrentLocationString()); // 使用已有的 createSignal
+
+// 辅助函数：更新 _currentUrlSignal 的值
+function _updateCurrentUrlSignal() {
+    _currentUrlSignal(_getCurrentLocationString());
+}
+
+// 监听 'popstate' 事件，当用户通过浏览器前进/后退按钮导航时触发
+window.addEventListener("popstate", () => {
+    _updateCurrentUrlSignal();
+});
+
+// 全局点击事件监听器，用于拦截 <a> 标签的点击并实现客户端导航
+document.addEventListener("click", (event) => {
+    // 寻找被点击元素或其祖先元素中的 <a> 标签
+    const anchor = event.target.closest("a");
+
+    if (anchor && anchor.href) {
+        // 解析 <a> 标签的 href 为一个完整的 URL 对象，以便于比较 origin
+        const targetUrl = new URL(anchor.href, window.location.origin);
+
+        // 检查是否是同源导航
+        // 1. targetUrl.origin 必须与当前页面 origin 相同
+        // 2. <a> 标签没有 target="_blank" 等意图在新窗口打开的属性
+        // 3. 用户没有按住修饰键 (Ctrl, Meta, Shift, Alt) 意图在新标签页或新窗口打开
+        // 4. <a> 标签没有 download 属性
+        if (
+            targetUrl.origin === window.location.origin &&
+            !anchor.target && // 常见的 target 值如 _blank, _self, _parent, _top
+            !event.metaKey && // Command 键 (macOS) 或 Windows 键
+            !event.ctrlKey && // Control 键
+            !event.shiftKey &&
+            !event.altKey &&
+            anchor.getAttribute("download") === null // 没有 download 属性
+        ) {
+            const newLocationString = targetUrl.pathname + targetUrl.search + targetUrl.hash;
+            // 仅当目标 URL 与当前 URL 不同时才进行导航
+            if (_getCurrentLocationString() !== newLocationString) {
+                event.preventDefault(); // 阻止浏览器的默认页面跳转行为
+                history.pushState(null, "", anchor.href); // 更新浏览器地址栏，并添加历史记录
+                _updateCurrentUrlSignal(); // 手动更新我们的 URL Signal
+            } else {
+                // 如果 URL 相同，但可能只是 hash 不同，某些情况下也需要阻止默认行为（例如，页面内平滑滚动）
+                // 但对于纯粹的路由，如果 pathname+search+hash 都相同，通常不需要 pushState
+                // 如果目标是当前页面的 hash，浏览器默认行为是滚动到锚点，这里也阻止它，让路由逻辑统一处理
+                if (anchor.href.includes("#") && targetUrl.pathname === window.location.pathname && targetUrl.search === window.location.search) {
+                    event.preventDefault();
+                    // 如果只是 hash 变化，也需要 pushState 来确保 popstate 能正确工作
+                    // 并且 _updateCurrentUrlSignal 确保了即使只是 hash 变化，监听器也能收到通知
+                    if (_getCurrentLocationString() !== newLocationString) {
+                        // 再次检查，因为上面可能没进去
+                        history.pushState(null, "", anchor.href);
+                        _updateCurrentUrlSignal();
+                    }
+                }
+            }
+        }
+    }
+});
+
+/**
+ * 创建一个 URL 监听器。
+ * 当浏览器当前的 URL 路径与提供的模式匹配或不再匹配时，调用相应的回调函数。
+ * @param {string|RegExp} urlPattern - 用于匹配 URL 的正则表达式或字符串。
+ *                                   如果是字符串，它将被直接用作 RegExp 的构造参数。
+ *                                   建议直接使用 RegExp 对象以获得更精确的控制。
+ *                                   该模式将与 `window.location.pathname + window.location.search + window.location.hash` 进行匹配。
+ * @param {Function} onMatch - 当 URL 从不匹配变为匹配 `urlPattern` 时调用的回调函数。
+ *                             回调函数会接收一个参数：匹配到的 URL 字符串。
+ * @param {Function} onUnmatch - 当 URL 从匹配 `urlPattern` 变为不匹配时调用的回调函数。
+ *                               回调函数会接收一个参数：新的、不匹配的 URL 字符串。
+ * @returns {Function} 一个停止函数。调用此函数将停止对 URL 变化的监听，并注销相关的 effect。
+ */
+function createUrlWatch(urlPattern, onMatch, onUnmatch) {
+    let regex;
+    if (urlPattern instanceof RegExp) {
+        regex = urlPattern;
+    } else if (typeof urlPattern === "string") {
+        try {
+            // 注意：如果字符串 urlPattern 包含特殊的正则表达式元字符，
+            // 用户需要确保它们被正确转义，或者框架需要提供更复杂的模式解析。
+            // 此处简单地将字符串视为正则表达式模式。
+            regex = new RegExp(urlPattern);
+        } catch (e) {
+            console.error(`[NueCore.createUrlWatch] 无效的正则表达式字符串: "${urlPattern}"`, e);
+            return () => {}; // 返回一个无操作的停止函数
+        }
+    } else {
+        console.error("[NueCore.createUrlWatch] urlPattern 参数必须是字符串或 RegExp 对象。");
+        return () => {};
+    }
+
+    let wasMatched = false; // 用于追踪上一次的匹配状态
+
+    // 使用 NueCore.createWatch 来监听 _currentUrlSignal 的变化
+    // immediate: true 确保在创建此 watch 时，会立即根据当前 URL 执行一次回调逻辑
+    const stopWatchingSignal = createWatch(
+        _currentUrlSignal,
+        (newUrlString) => {
+            const isNowMatched = regex.test(newUrlString);
+
+            if (isNowMatched && !wasMatched) {
+                // 从不匹配 -> 匹配
+                if (typeof onMatch === "function") {
+                    try {
+                        onMatch(newUrlString);
+                    } catch (e) {
+                        console.error("[NueCore.createUrlWatch] onMatch 回调执行出错:", e);
+                    }
+                }
+            } else if (!isNowMatched && wasMatched) {
+                // 从匹配 -> 不匹配
+                if (typeof onUnmatch === "function") {
+                    try {
+                        onUnmatch(newUrlString);
+                    } catch (e) {
+                        console.error("[NueCore.createUrlWatch] onUnmatch 回调执行出错:", e);
+                    }
+                }
+            }
+            wasMatched = isNowMatched; // 更新匹配状态
+        },
+        { immediate: true },
+    );
+
+    // 返回的停止函数，调用它会停止内部的 createWatch
+    return stopWatchingSignal;
+}
+
+/**
+ * 编程式导航函数。
+ * @param {string} path - 要导航到的路径 (例如, '/users/1', '/about?q=nue', '#section').
+ * @param {object} [state=null] - (可选) 传递给 history.pushState 的状态对象。
+ * @param {string} [title=''] - (可选) 传递给 history.pushState 的标题 (通常被浏览器忽略)。
+ */
+function navigateTo(path, state = null, title = "") {
+    const newLocationString = new URL(path, window.location.origin).pathname + new URL(path, window.location.origin).search + new URL(path, window.location.origin).hash;
+
+    if (_getCurrentLocationString() !== newLocationString) {
+        history.pushState(state, title, path);
+        _updateCurrentUrlSignal();
+    }
+}
+
+// === 路由功能结束 ===
 
 // 组件及模块相关缓存与注册表
 const componentCache = new Map(); // 缓存组件文本、结构、AST: { versionedUrl -> { text, structure, ast, originalUrl } }
@@ -679,7 +834,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                     continue;
                 }
 
-                if (attrName.startsWith(":")) { // 动态 prop
+                if (attrName.startsWith(":")) {
+                    // 动态 prop
                     const rawPropName = attrName.substring(1);
                     const camelCasePropName = kebabToCamel(rawPropName);
                     const expression = attrValue;
@@ -694,7 +850,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                     });
                     initialProps[camelCasePropName] = propSignal;
                     attributesToRemove.push(attrName);
-                } else if (attrName.startsWith("@")) { // 事件绑定
+                } else if (attrName.startsWith("@")) {
+                    // 事件绑定
                     const eventName = attrName.substring(1);
                     const handlerExpression = attrValue;
                     eventHandlers[eventName] = (payload) => {
@@ -710,7 +867,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                         }
                     };
                     attributesToRemove.push(attrName);
-                } else { // 静态 prop
+                } else {
+                    // 静态 prop
                     initialProps[kebabToCamel(attrName)] = attrValue;
                 }
             }
@@ -758,15 +916,7 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             element.parentNode.replaceChild(placeholder, element);
 
             // 异步挂载子组件
-            mountComponent(
-                childVersionedUrl,
-                placeholder,
-                initialProps,
-                eventHandlers,
-                tagName,
-                parsedSlots,
-                childOriginalUrl,
-            ).catch((error) => console.error(`核心错误：[${parentComponentName}] 异步挂载子组件 <${tagName}> (${childVersionedUrl}) 失败:`, error));
+            mountComponent(childVersionedUrl, placeholder, initialProps, eventHandlers, tagName, parsedSlots, childOriginalUrl).catch((error) => console.error(`核心错误：[${parentComponentName}] 异步挂载子组件 <${tagName}> (${childVersionedUrl}) 失败:`, error));
             return; // 子组件已处理，不再继续编译此节点
         }
 
@@ -791,7 +941,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             if (parentOfSlot) {
                 if (providedContentFragment && providedContentFragment.childNodes.length > 0) {
                     parentOfSlot.insertBefore(providedContentFragment.cloneNode(true), element);
-                } else { // 渲染 <slot> 标签的后备内容
+                } else {
+                    // 渲染 <slot> 标签的后备内容
                     const fallbackFragment = document.createDocumentFragment();
                     while (element.firstChild) fallbackFragment.appendChild(element.firstChild);
                     Array.from(fallbackFragment.childNodes).forEach((fallbackNode) => {
@@ -811,10 +962,12 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
         for (const attr of Array.from(element.attributes)) {
             const attrName = attr.name;
             const attrValue = attr.value;
-            if (attrName.startsWith(":")) { // 动态属性绑定
+            if (attrName.startsWith(":")) {
+                // 动态属性绑定
                 if (directiveHandlers.handleAttributeBinding) directiveHandlers.handleAttributeBinding(element, attrName.substring(1), attrValue, scope, parentComponentName);
                 attributesToRemoveAfterProcessing.push(attrName);
-            } else if (attrName.startsWith("@")) { // DOM 事件绑定
+            } else if (attrName.startsWith("@")) {
+                // DOM 事件绑定
                 const eventName = attrName.substring(1);
                 element.addEventListener(eventName, (event) => {
                     try {
@@ -844,7 +997,6 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
 
         // 递归编译当前元素的子节点
         Array.from(element.childNodes).forEach((child) => compileNode(child, scope, directiveHandlers, `${parentComponentName} > ${element.tagName.toUpperCase()}`, currentContextOriginalUrl));
-
     } else if (node.nodeType === Node.TEXT_NODE) {
         // 处理文本节点中的插值 {{ ... }}
         const textContent = node.textContent || "";
@@ -856,14 +1008,16 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
         let match;
         mustacheRegex.lastIndex = 0; // 重置正则 lastIndex
         while ((match = mustacheRegex.exec(textContent)) !== null) {
-            if (match.index > lastIndex) { // 表达式前的普通文本
+            if (match.index > lastIndex) {
+                // 表达式前的普通文本
                 segments.push(document.createTextNode(textContent.substring(lastIndex, match.index)));
             }
             const expression = match[1].trim();
             const placeholderNode = document.createTextNode(""); // 为表达式结果创建占位文本节点
             segments.push(placeholderNode);
 
-            createEffect(() => { // 监听表达式依赖变化并更新占位符
+            createEffect(() => {
+                // 监听表达式依赖变化并更新占位符
                 try {
                     const value = directiveHandlers.evaluateExpression(expression, scope);
                     placeholderNode.textContent = value === undefined || value === null ? "" : String(value);
@@ -874,7 +1028,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             });
             lastIndex = mustacheRegex.lastIndex;
         }
-        if (lastIndex < textContent.length) { // 表达式后的剩余普通文本
+        if (lastIndex < textContent.length) {
+            // 表达式后的剩余普通文本
             segments.push(document.createTextNode(textContent.substring(lastIndex)));
         }
 
@@ -918,11 +1073,11 @@ function cleanupAndRemoveNode(node) {
         // 执行与此组件根元素关联的自动注册的 Effect 清理函数
         if (componentEffectsRegistry.has(node)) {
             const effectsToStop = componentEffectsRegistry.get(node);
-            effectsToStop.forEach(stopFn => {
+            effectsToStop.forEach((stopFn) => {
                 try {
                     stopFn(); // 执行每个 Effect 的清理函数
                 } catch (error) {
-                    console.error(`核心错误：自动清理 Effect 时出错 (元素: ${node.tagName || 'Node'}):`, error);
+                    console.error(`核心错误：自动清理 Effect 时出错 (元素: ${node.tagName || "Node"}):`, error);
                 }
             });
             componentEffectsRegistry.delete(node); // 清理完成后，从注册表中移除
@@ -934,7 +1089,7 @@ function cleanupAndRemoveNode(node) {
             try {
                 cleanupCallback();
             } catch (error) {
-                console.error(`核心错误：执行 onUnmount 钩子时出错 (元素: ${node.tagName || 'Node'}):`, error);
+                console.error(`核心错误：执行 onUnmount 钩子时出错 (元素: ${node.tagName || "Node"}):`, error);
             }
             componentCleanupRegistry.delete(node); // 移除回调
         }
@@ -958,20 +1113,9 @@ function cleanupAndRemoveNode(node) {
  * @param {string} [baseResolutionUrlOverride] - (子组件用) 解析 `componentFile` 相对路径的基准 URL。
  * @returns {Promise<Element|null>} Promise 解析为挂载的组件根 DOM 元素，失败则为 null。
  */
-async function mountComponent(
-    componentFile,
-    targetSelectorOrElement,
-    initialProps = {},
-    eventHandlers = {},
-    componentNameSuggestion,
-    parsedSlots = {},
-    baseResolutionUrlOverride,
-) {
+async function mountComponent(componentFile, targetSelectorOrElement, initialProps = {}, eventHandlers = {}, componentNameSuggestion, parsedSlots = {}, baseResolutionUrlOverride) {
     // --- 步骤 A: 解析 URL 和确定组件名 ---
-    const { versionedUrl: versionedComponentUrl, originalUrl: originalAbsoluteUrl } = getVersionedAndOriginalUrls(
-        componentFile,
-        baseResolutionUrlOverride || null
-    );
+    const { versionedUrl: versionedComponentUrl, originalUrl: originalAbsoluteUrl } = getVersionedAndOriginalUrls(componentFile, baseResolutionUrlOverride || null);
 
     let componentName = componentNameSuggestion;
     if (!componentName) {
@@ -1028,7 +1172,8 @@ async function mountComponent(
         // B.3: 获取组件的文本内容
         const componentText = await fetchAndCacheComponentText(versionedComponentUrl, originalAbsoluteUrl);
         let cacheEntry = componentCache.get(versionedComponentUrl);
-        if (!cacheEntry) { // 理论上 fetchAndCacheComponentText 会创建
+        if (!cacheEntry) {
+            // 理论上 fetchAndCacheComponentText 会创建
             console.error(`核心严重错误：组件 ${componentName} (${versionedComponentUrl}) 文本已获取，但内存缓存条目丢失！将尝试重新创建。`);
             cacheEntry = { text: componentText, structure: null, ast: null, originalUrl: originalAbsoluteUrl };
             componentCache.set(versionedComponentUrl, cacheEntry);
@@ -1054,10 +1199,10 @@ async function mountComponent(
         if (componentScope && typeof componentScope === "object") {
             componentScope.$slots = parsedSlots;
         } else {
-            if (componentScope !== null && typeof componentScope !== 'undefined') {
+            if (componentScope !== null && typeof componentScope !== "undefined") {
                 console.warn(`核心警告：组件 ${componentName} 的脚本已执行，但未返回有效的对象作用域 (实际返回: ${typeof componentScope})，无法注入 $slots。`);
             } else {
-                 console.warn(`核心警告：组件 ${componentName} 的脚本执行后返回 ${componentScope}，无法注入 $slots。`);
+                console.warn(`核心警告：组件 ${componentName} 的脚本执行后返回 ${componentScope}，无法注入 $slots。`);
             }
         }
 
@@ -1071,15 +1216,14 @@ async function mountComponent(
         const potentialRootElementInFragment = fragment.firstElementChild; // 可能是组件的根元素
 
         // B.9: 编译 DOM 片段
-        Array.from(fragment.childNodes).forEach((node) =>
-            compileNode(node, componentScope, window.NueDirectives, componentName, originalAbsoluteUrl)
-        );
+        Array.from(fragment.childNodes).forEach((node) => compileNode(node, componentScope, window.NueDirectives, componentName, originalAbsoluteUrl));
 
         // B.10: 注入样式
         injectStyles(style, originalAbsoluteUrl);
 
         // B.11: 挂载 DOM 片段
-        if (isPlaceholder) { // 替换注释占位符
+        if (isPlaceholder) {
+            // 替换注释占位符
             const parent = targetElement.parentNode;
             if (parent) {
                 parent.insertBefore(fragment, targetElement);
@@ -1088,7 +1232,8 @@ async function mountComponent(
             } else {
                 console.warn(`核心警告：[${componentName}] 尝试挂载到已脱离 DOM 的占位符，操作可能未生效。`);
             }
-        } else { // 替换目标元素内容
+        } else {
+            // 替换目标元素内容
             cleanupAndRemoveNode(targetElement.firstChild); // 清理目标元素内所有现有子节点
             targetElement.innerHTML = ""; // 确保清空
             mountedRootElement = fragment.firstElementChild; // 假设片段的第一个元素是组件根
@@ -1113,7 +1258,6 @@ async function mountComponent(
             }
         }
         return mountedRootElement;
-
     } catch (error) {
         console.error(`核心错误：挂载组件 ${componentName} (源文件: ${originalAbsoluteUrl}, 版本化URL: ${versionedComponentUrl}) 失败:`, error);
         if (targetElement instanceof Element && !isPlaceholder) {
@@ -1168,8 +1312,8 @@ window.NueCore = {
     createSignal,
     createEffect,
     createWatch, // 也暴露 createWatch
+    createUrlWatch,
+    navigateTo,
     compileNode, // 暴露编译函数，可能用于高级场景或指令系统扩展
     cleanupAndRemoveNode, // 暴露清理函数
-    // 注意: importNjs 函数不在这里全局暴露，它是在脚本执行时通过闭包和 Function 构造器注入的。
 };
-
