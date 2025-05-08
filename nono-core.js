@@ -588,37 +588,47 @@ function parseScriptWithAcorn(scriptContent, versionedUrl) {
     }
 }
 
+
 /**
  * 内部函数，用于执行 NJS 脚本内容。支持顶层 await。
  * @param {string} scriptContent - NJS 文件的 JavaScript 文本内容。
- * @param {string} njsVersionedUrl - NJS 文件的版本化 URL，用于日志和调试。
- * @param {string} njsOriginalUrl - NJS 文件的原始绝对 URL，用作其内部 importNjs 调用的基准路径。
- * @returns {Promise<*>} 一个 Promise，解析为 NJS 脚本执行后返回的结果 (通常是模块导出的内容)。
+ * @param {string} njsVersionedUrl - NJS 文件的版本化 URL (主要用于缓存键)。
+ * @param {string} njsOriginalUrl - NJS 文件的原始绝对 URL。
+ * @returns {Promise<*>} 一个 Promise，解析为 NJS 脚本执行后返回的结果。
+ * @throws {Error} 如果脚本执行失败，会重新抛出原始错误。
  */
-function _executeNjsScript(scriptContent, njsVersionedUrl, njsOriginalUrl) {
+async function _executeNjsScript(scriptContent, njsVersionedUrl, njsOriginalUrl) {
     if (!scriptContent.trim()) {
+        // 对于空脚本，可以只警告一次，不设置 primaryError 标志，因为它不一定是致命的
+        // (或者根据你的需求决定是否也将其视为主要错误来源)
         console.warn(`核心警告：NJS 脚本 ${njsOriginalUrl} 内容为空，将返回 Promise<undefined>。`);
-        return (async () => undefined)(); // 包装在 async IIFE 中以保持返回 Promise 的一致性
+        return undefined;
     }
+
     try {
-        // 创建一个绑定了当前 NJS 文件原始 URL 的 importNjs 函数。
         const boundImportNjs = (relativePath) => {
             return _loadAndExecuteNjsModule(relativePath, njsOriginalUrl);
         };
 
-        // 将脚本内容包裹在异步立即执行函数表达式 (Async IIFE) 中，支持顶层 await。
-        // Function 构造器执行后会返回这个 Async IIFE 的 Promise。
-        const njsFunction = new Function("importNjs", `return (async () => { ${scriptContent} })();`);
-        const resultPromise = njsFunction(boundImportNjs);
+        let dynamicNjsName;
+        try {
+            const urlObj = new URL(njsOriginalUrl);
+            dynamicNjsName = `${urlObj.pathname}.temp.js`;
+        } catch (e) {
+            dynamicNjsName = `${njsOriginalUrl.replace(/[?#].*$/, '')}.temp.js`;
+        }
+        dynamicNjsName = encodeURI(dynamicNjsName);
 
-        return resultPromise; // 返回由 Async IIFE 产生的 Promise
-    } catch (error) {
-        // 捕获 Function 构造器本身的同步错误
-        console.error(`核心错误：构造 NJS 脚本执行函数 (源: ${njsOriginalUrl}, 版本化: ${njsVersionedUrl}) 时出错:`, error);
-        console.error("核心错误：NJS 脚本内容:\n", scriptContent);
-        return Promise.reject(error); // 返回一个立即 rejected 的 Promise
+        const njsFunction = new Function("importNjs", `return (async () => { \n${scriptContent}\n })(); \n//# sourceURL=${dynamicNjsName}`);
+        
+        const resultPromise = njsFunction(boundImportNjs);
+        return await resultPromise;
+
+    } catch (error) { // 捕获来自 new Function 或 await resultPromise 的错误
+        throw error; // 重新抛出原始错误
     }
 }
+
 
 /**
  * 核心的 NJS 模块加载和执行函数。这是实现 `importNjs` 功能的主体。
@@ -654,7 +664,7 @@ async function _loadAndExecuteNjsModule(relativePath, baseOriginalUrl) {
             return finalModuleData;
         } catch (error) {
             // 错误已在 _executeNjsScript 或 fetchAndCacheComponentText 中打印
-            console.error(`核心错误：NJS 模块 ${originalUrl} (版本化 URL: ${versionedUrl}) 的加载或执行流程失败。`);
+            console.error(`核心错误：NJS 模块 ${originalUrl} 的加载或执行流程失败。`);
             throw error; // 重新抛出，以便上层处理
         }
     })();
@@ -671,22 +681,19 @@ async function _loadAndExecuteNjsModule(relativePath, baseOriginalUrl) {
 /**
  * 执行组件的 <script> 块内容。支持顶层 await。
  * @param {string} scriptContent - 组件 <script> 块的文本内容。
- * @param {object|null} ast - 由 Acorn 解析得到的脚本 AST (可选，但推荐用于错误定位)。
+ * @param {object|null} ast - 由 Acorn 解析得到的脚本 AST (可选)。
  * @param {object} [initialProps={}] - 传递给组件的初始 props 对象。
- * @param {Function} [emit=() => console.warn(...)] - 子组件用于向父组件派发事件的函数。
- * @param {string} componentOriginalUrl - 组件的原始绝对 URL，用于日志和内部 importNjs 的路径解析。
- * @returns {Promise<object>} 一个 Promise，解析为组件的作用域对象。如果脚本为空、解析失败或执行出错，则解析为空对象。
+ * @param {Function} [emit=() => {}] - 子组件用于向父组件派发事件的函数。
+ * @param {string} componentOriginalUrl - 组件的原始绝对 URL。
+ * @returns {Promise<object>} 一个 Promise，解析为组件的作用域对象。
+ * @throws {Error} 如果脚本执行失败，会重新抛出原始错误。
  */
-async function executeScript(scriptContent, ast, initialProps = {}, emit = () => console.warn("核心警告：emit 函数未在执行脚本时提供"), componentOriginalUrl) {
+async function executeScript(scriptContent, ast, initialProps = {}, emit = () => {}, componentOriginalUrl) {
     if (!scriptContent.trim()) {
-        return {}; // 如果脚本为空，返回空作用域
-    }
-    if (ast === null && scriptContent.trim()) {
-        console.warn(`核心警告：由于脚本解析失败 (源: ${componentOriginalUrl})，跳过执行。返回空作用域。`);
         return {};
     }
+
     try {
-        // 为 .nue 组件脚本内部的 importNjs 调用创建特定于此组件的实例
         const boundImportNjsForNue = (relativePath) => {
             return _loadAndExecuteNjsModule(relativePath, componentOriginalUrl);
         };
@@ -694,24 +701,28 @@ async function executeScript(scriptContent, ast, initialProps = {}, emit = () =>
         const scriptArgNames = ["createSignal", "createWatch", "props", "emit", "importNjs"];
         const scriptArgValues = [createSignal, createWatch, initialProps, emit, boundImportNjsForNue];
 
-        // 包裹在 Async IIFE 中以支持顶层 await
-        const wrappedScriptContent = `return (async () => { ${scriptContent} })();`;
+        let dynamicScriptName;
+        try {
+            const urlObj = new URL(componentOriginalUrl);
+            dynamicScriptName = `${urlObj.pathname}.temp.js`;
+        } catch (e) {
+            dynamicScriptName = `${componentOriginalUrl.replace(/[?#].*$/, '')}.temp.js`;
+        }
+        dynamicScriptName = encodeURI(dynamicScriptName);
+
+        const wrappedScriptContent = `return (async () => { \n${scriptContent}\n })(); \n//# sourceURL=${dynamicScriptName}`;
         const scriptFunction = new Function(...scriptArgNames, wrappedScriptContent);
 
-        // scriptFunction(...) 返回的是 Async IIFE 的 Promise
         const componentScopePromise = scriptFunction(...scriptArgValues);
         const componentScope = await componentScopePromise;
 
         if (typeof componentScope === "object" && componentScope !== null) {
-            return componentScope; // 脚本应返回一个对象作为其作用域
+            return componentScope;
         } else {
-            console.warn(`核心警告：组件脚本 (源: ${componentOriginalUrl}) 已执行，但未返回对象作为作用域。请确保脚本末尾有 'return { ... };'。返回空作用域。`);
-            return {};
+            throw err; // 抛出错误以中断流程
         }
-    } catch (error) {
-        console.error(`核心错误：执行组件脚本 (源: ${componentOriginalUrl}) 时出错:`, error);
-        console.error("核心错误：脚本内容:\n", scriptContent);
-        return {}; // 出错时返回空作用域
+    } catch (error) { // 捕获来自 new Function 或 await componentScopePromise 的错误
+        throw error; // 重新抛出原始错误，让上层处理
     }
 }
 
@@ -1296,7 +1307,7 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
         }
         return mountedRootElement;
     } catch (error) {
-        console.error(`核心错误：挂载组件 ${componentName} (源文件: ${originalAbsoluteUrl}, 版本化URL: ${versionedComponentUrl}) 失败:`, error);
+        console.error(`核心错误：挂载组件 ${componentName} (源文件: ${originalAbsoluteUrl}) 失败:`, error);
         if (targetElement instanceof Element && !isPlaceholder) {
             targetElement.innerHTML = `<p style="color:red;">组件 ${componentName} (源: ${originalAbsoluteUrl}) 加载或渲染失败。详情请查看控制台。</p>`;
         } else if (isPlaceholder && targetElement.parentNode) {

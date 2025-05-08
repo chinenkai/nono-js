@@ -1,6 +1,6 @@
 // 文件名: config.njs
 // 路径: (假设与 utils.njs 在同一目录，或者你能正确引用到)
-
+xx
 console.log('--- config.njs executed ---'); // 调试信息，确认只执行一次
 
 const appName = "NonoApp";
