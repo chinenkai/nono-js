@@ -904,170 +904,225 @@ function cleanupAndRemoveNode(node) {
     }
 }
 
-// 内部组件挂载函数
-async function _mountComponentInternal(versionedComponentUrl, target, initialProps = {}, eventHandlers = {}, componentName = "组件", parsedSlots = {}, originalAbsoluteUrl) {
-    let targetElement = null; // 挂载的目标 DOM 元素
-    let isPlaceholder = false; // 标记 target 是否为注释占位符
 
-    // 解析挂载目标
-    if (typeof target === "string") {
-        targetElement = document.querySelector(target);
+/**
+ * 挂载组件的核心函数。
+ * 此函数负责加载组件文件、解析其内容、执行脚本、编译模板并将其渲染到指定的DOM目标。
+ * 它合并了原有的 mountComponent (公开API) 和 _mountComponentInternal (内部实现) 的功能。
+ *
+ * @param {string} componentFile - 要挂载的组件的文件路径 (可以是相对路径或绝对路径)。
+ * @param {string|Element|Comment} targetSelectorOrElement - 组件的挂载目标。
+ *        可以是CSS选择器字符串、DOM元素对象或注释节点 (通常用于子组件占位符)。
+ * @param {object} [initialProps={}] - 传递给组件实例的初始属性 (props) 对象。
+ * @param {object} [eventHandlers={}] - (主要供子组件使用) 父组件为子组件提供的事件处理器集合。
+ *        键是事件名，值是处理函数。
+ * @param {string} [componentNameSuggestion] - (主要供子组件使用) 建议的组件名称，用于日志和调试。
+ *        如果未提供，将尝试从 componentFile 推断。
+ * @param {object} [parsedSlots={}] - (主要供子组件使用) 父组件传递给子组件的、已经编译好的插槽内容。
+ *        键是插槽名 ('default' 或具名)，值是包含已编译节点的 DocumentFragment。
+ * @param {string} [baseResolutionUrlOverride] - (主要供子组件使用) 用于解析相对路径 `componentFile` 的基准URL。
+ *        如果 `componentFile` 是相对路径，则会相对于此URL进行解析。
+ *        如果未提供，则相对于当前文档的URL进行解析。
+ * @returns {Promise<Element|null>} 一个 Promise，解析为挂载的组件的根DOM元素；如果挂载失败，则解析为 null。
+ */
+async function mountComponent(
+    componentFile, // 参数: 要挂载的组件文件路径 (字符串)
+    targetSelectorOrElement, // 参数: 挂载目标 (DOM选择器字符串, Element对象, 或 Comment对象)
+    initialProps = {}, // 参数: 传递给组件的初始 props (对象)
+    eventHandlers = {}, // 参数: (供子组件使用) 父组件提供的事件处理器 (对象)
+    componentNameSuggestion, // 参数: (供子组件使用) 建议的组件名 (字符串, 可选)
+    parsedSlots = {}, // 参数: (供子组件使用) 父组件传入的、已经编译好的插槽内容 (对象)
+    baseResolutionUrlOverride, // 参数: (供子组件使用) 用于解析 componentFile 的基准URL (字符串, 可选)
+) {
+    // --- 步骤 A: 解析 URL 和确定组件名 (此部分逻辑源自原公开的 mountComponent) ---
+
+    // A.1: 解析组件文件的版本化 URL 和原始绝对 URL
+    // componentFile: 可能是相对路径或绝对路径
+    // baseResolutionUrlOverride: 如果提供，则作为解析 componentFile 的基准；否则，resolveUrl 内部会使用 window.location
+    const { versionedUrl: versionedComponentUrl, originalUrl: originalAbsoluteUrl } = getVersionedAndOriginalUrls(
+        componentFile,
+        baseResolutionUrlOverride || null
+    );
+
+    // A.2: 确定最终的组件名，用于日志、调试和事件处理器
+    let componentName = componentNameSuggestion; // 优先使用建议的组件名 (通常在挂载子组件时由父组件的标签名提供)
+    if (!componentName) {
+        // 如果没有建议名称 (通常是挂载根组件时)，则从组件的原始 URL 中提取
+        // 例如: "/path/to/MyComponent.nue" -> "MyComponent"
+        const fileName = originalAbsoluteUrl.substring(originalAbsoluteUrl.lastIndexOf("/") + 1);
+        const nameParts = fileName.split("."); // "MyComponent.nue" -> ["MyComponent", "nue"]
+        componentName = nameParts[0] || "组件"; // 取文件名部分，如果为空则默认为 "组件"
+    }
+
+    // --- 步骤 B: 组件挂载核心逻辑 (此部分逻辑源自原 _mountComponentInternal) ---
+    // 使用上面解析得到的 versionedComponentUrl, originalAbsoluteUrl, componentName
+    // 以及传入的 targetSelectorOrElement, initialProps, eventHandlers, parsedSlots
+
+    let targetElement = null; // 挂载的目标 DOM 元素或注释节点
+    let isPlaceholder = false; // 标记 targetElement 是否为注释占位符
+
+    // B.1: 解析挂载目标 (targetSelectorOrElement)
+    if (typeof targetSelectorOrElement === "string") {
+        // 如果是字符串，则视为 CSS 选择器
+        targetElement = document.querySelector(targetSelectorOrElement);
         if (!targetElement) {
-            console.error(`核心错误：挂载失败，找不到目标元素 "${target}"`);
-            return null;
+            console.error(`核心错误：[${componentName}] 挂载失败，找不到目标元素 "${targetSelectorOrElement}"`);
+            return null; // 找不到目标，无法继续
         }
-    } else if (target instanceof Element || target instanceof Comment) {
-        targetElement = target;
-        isPlaceholder = target instanceof Comment;
+    } else if (targetSelectorOrElement instanceof Element || targetSelectorOrElement instanceof Comment) {
+        // 如果是 Element 或 Comment 节点，则直接使用
+        targetElement = targetSelectorOrElement;
+        isPlaceholder = targetSelectorOrElement instanceof Comment; // 检查是否为注释节点 (用于子组件占位符)
         if (isPlaceholder && !targetElement.parentNode) {
-            // 占位符已脱离 DOM
-            console.error(`核心错误：挂载失败，注释占位符已脱离 DOM`);
+            // 如果是占位符，但已从 DOM 中移除，则无法挂载
+            console.error(`核心错误：[${componentName}] 挂载失败，注释占位符已脱离 DOM`);
             return null;
         }
     } else {
-        console.error(`核心错误：挂载失败，无效的目标类型`, target);
+        // 无效的目标类型
+        console.error(`核心错误：[${componentName}] 挂载失败，无效的目标类型:`, targetSelectorOrElement);
         return null;
     }
 
-    // 检查依赖项 (Acorn, 指令处理器)
+    // B.2: 检查核心依赖 (Acorn 解析器, NueDirectives 指令处理器)
     if (typeof window.acorn === "undefined") {
-        console.error("核心错误：Acorn 解析器 (acorn.js) 未加载！");
-        if (targetElement instanceof Element && !isPlaceholder) targetElement.innerHTML = `<p style="color: red;">错误：acorn.js 未加载</p>`;
+        console.error(`核心错误：[${componentName}] Acorn 解析器 (acorn.js) 未加载！`);
+        // 如果目标是元素且不是占位符，尝试在目标元素内显示错误信息
+        if (targetElement instanceof Element && !isPlaceholder) {
+            targetElement.innerHTML = `<p style="color: red;">错误：[${componentName}] Acorn 解析器 (acorn.js) 未加载</p>`;
+        }
         return null;
     }
     if (typeof window.NueDirectives === "undefined" || typeof window.NueDirectives.evaluateExpression !== "function") {
-        console.error("核心错误：指令处理器 (nono-directives.js) 或其 evaluateExpression 未加载！");
-        if (targetElement instanceof Element && !isPlaceholder) targetElement.innerHTML = `<p style="color: red;">错误：nono-directives.js 未加载</p>`;
+        console.error(`核心错误：[${componentName}] 指令处理器 (nono-directives.js) 或其 evaluateExpression 方法未加载！`);
+        if (targetElement instanceof Element && !isPlaceholder) {
+            targetElement.innerHTML = `<p style="color: red;">错误：[${componentName}] 指令处理器 (nono-directives.js) 未加载</p>`;
+        }
         return null;
     }
 
     try {
-        // 1. 获取组件文本内容
+        // B.3: 获取组件的文本内容 (可能来自网络、localStorage 或内存缓存)
+        // 使用 versionedComponentUrl 进行请求和缓存键操作，originalAbsoluteUrl 用于元数据和日志
         const componentText = await fetchAndCacheComponentText(versionedComponentUrl, originalAbsoluteUrl);
         let cacheEntry = componentCache.get(versionedComponentUrl);
         if (!cacheEntry) {
-            // 理论上 fetchAndCacheComponentText 会创建缓存
-            console.error(`核心严重错误：组件 ${versionedComponentUrl} 文本已获取，但缓存条目丢失！将尝试重新创建。`);
+            // 正常情况下 fetchAndCacheComponentText 会创建或更新内存缓存条目
+            console.error(`核心严重错误：组件 ${componentName} (${versionedComponentUrl}) 文本已获取，但内存缓存条目丢失！将尝试重新创建。`);
             cacheEntry = { text: componentText, structure: null, ast: null, originalUrl: originalAbsoluteUrl };
             componentCache.set(versionedComponentUrl, cacheEntry);
         }
 
-        // 2. 解析组件结构
+        // B.4: 解析组件结构 (<template>, <script>, <style> 块)
+        // 如果内存缓存中尚无结构信息，则进行解析并缓存
         if (!cacheEntry.structure) {
             cacheEntry.structure = parseComponentStructure(componentText, versionedComponentUrl);
         }
         const { template, script, style } = cacheEntry.structure;
 
-        // 3. 解析脚本 AST
+        // B.5: 使用 Acorn 解析 <script> 内容为 AST (抽象语法树)
+        // 仅当脚本内容非空且内存缓存中尚无 AST 时进行解析并缓存
         if (script.trim() && !cacheEntry.ast) {
             cacheEntry.ast = parseScriptWithAcorn(script, versionedComponentUrl);
         }
-        const ast = cacheEntry.ast;
+        const ast = cacheEntry.ast; // ast 可能为 null (如果脚本为空或解析失败)
 
-        // 4. 执行组件脚本，获取作用域 (executeScript 现在是 async)
+        // B.6: 执行组件的 <script> 块，获取其作用域对象
+        // executeScript 是异步的，因为它可能包含顶层 await (例如，通过 importNjs)
+        // initialProps: 传递给脚本的 props
+        // emit: 创建一个 emit 函数，供脚本内部调用以触发父组件事件 (通过 eventHandlers)
+        // originalAbsoluteUrl: 作为脚本内部 importNjs 解析相对路径的基准 URL
         const emit = createEmitFunction(eventHandlers, componentName);
-        // 传递 originalAbsoluteUrl 作为组件脚本的基准 URL (用于其内部 importNjs)
         const componentScope = await executeScript(script, ast, initialProps, emit, originalAbsoluteUrl);
 
-        // 将解析好的插槽内容 ($slots) 注入到组件作用域
+        // B.7: 将父组件传入的、已编译的插槽内容 ($slots) 注入到子组件的作用域中
+        // parsedSlots 是一个对象，键是插槽名，值是 DocumentFragment (包含已编译的节点)
         if (componentScope && typeof componentScope === "object") {
             componentScope.$slots = parsedSlots;
         } else {
-            if (componentScope) {
-                // 确保 componentScope 不是 null/undefined
-                console.warn(`核心警告：组件 ${componentName} 的脚本未返回有效作用域对象，无法注入 $slots。实际返回:`, componentScope);
+            // 如果脚本未返回有效的对象作用域，则无法注入 $slots
+            if (componentScope !== null && typeof componentScope !== 'undefined') { // 避免对 null/undefined 调用 typeof
+                console.warn(`核心警告：组件 ${componentName} 的脚本已执行，但未返回有效的对象作用域 (实际返回: ${typeof componentScope})，无法注入 $slots。`);
+            } else {
+                 console.warn(`核心警告：组件 ${componentName} 的脚本执行后返回 ${componentScope}，无法注入 $slots。`);
             }
         }
 
-        // 5. 创建组件的 DOM 片段
-        const fragment = document.createDocumentFragment();
-        const tempDiv = document.createElement("div");
-        tempDiv.innerHTML = template.trim();
-        while (tempDiv.firstChild) fragment.appendChild(tempDiv.firstChild);
+        // B.8: 根据组件的 <template> 内容创建 DOM 片段
+        const fragment = document.createDocumentFragment(); // 使用 DocumentFragment 以提高性能
+        const tempDiv = document.createElement("div"); // 临时容器，用于解析 HTML 字符串
+        tempDiv.innerHTML = template.trim(); // 解析模板 HTML
+        while (tempDiv.firstChild) {
+            fragment.appendChild(tempDiv.firstChild); // 将解析后的节点移到 fragment
+        }
 
-        const potentialRootElementInFragment = fragment.firstElementChild; // 可能的根元素
+        // 记录片段中的第一个元素，这可能是组件的根元素 (如果模板非空且有顶级元素)
+        const potentialRootElementInFragment = fragment.firstElementChild;
 
-        // 6. 编译 DOM 片段 (originalAbsoluteUrl 作为当前编译上下文的 URL)
-        Array.from(fragment.childNodes).forEach((node) => compileNode(node, componentScope, window.NueDirectives, componentName, originalAbsoluteUrl));
+        // B.9: 编译 DOM 片段 (处理指令、插值、子组件、<slot> 标签等)
+        // compileNode 会递归处理片段中的所有节点
+        // componentScope: 当前组件的作用域，用于解析表达式
+        // window.NueDirectives: 指令处理器集合
+        // componentName: 当前组件的名称，用于日志和子组件命名
+        // originalAbsoluteUrl: 作为编译过程中解析子组件相对路径的基准 URL
+        Array.from(fragment.childNodes).forEach((node) =>
+            compileNode(node, componentScope, window.NueDirectives, componentName, originalAbsoluteUrl)
+        );
 
-        // 7. 注入组件样式
+        // B.10: 注入组件的 <style> 内容到文档的 <head> 中
+        // originalAbsoluteUrl 用于生成唯一的 style 标签 ID，防止重复注入
         injectStyles(style, originalAbsoluteUrl);
 
-        // 8. 挂载到目标位置
-        let mountedRootElement = null;
+        // B.11: 将编译好的 DOM 片段挂载到目标位置
+        let mountedRootElement = null; // 实际挂载到 DOM 树上的组件根元素 (如果有)
         if (isPlaceholder) {
-            // 目标是注释占位符
+            // 如果目标是注释占位符 (通常用于子组件)
             const parent = targetElement.parentNode;
             if (parent) {
-                parent.insertBefore(fragment, targetElement);
-                mountedRootElement = potentialRootElementInFragment;
-                parent.removeChild(targetElement); // 移除占位符
+                parent.insertBefore(fragment, targetElement); // 在占位符之前插入组件内容
+                mountedRootElement = potentialRootElementInFragment; // 假设第一个子元素是根
+                parent.removeChild(targetElement); // 移除占位符注释节点
+            } else {
+                // 这种情况理论上已在 B.1 中处理 (isPlaceholder && !targetElement.parentNode)
+                console.warn(`核心警告：[${componentName}] 尝试挂载到已脱离 DOM 的占位符，操作可能未生效。`);
             }
         } else {
-            // 目标是普通元素
-            cleanupAndRemoveNode(targetElement.firstChild); // 清理旧内容
-            targetElement.innerHTML = ""; // 确保清空
-            mountedRootElement = fragment.firstElementChild;
-            targetElement.appendChild(fragment);
+            // 如果目标是普通 DOM 元素 (通常用于根组件或替换元素内容)
+            cleanupAndRemoveNode(targetElement.firstChild); // 清理目标元素内的所有现有子节点及其关联的 effect/钩子
+            targetElement.innerHTML = ""; // 再次确保清空 (以防 cleanupAndRemoveNode 有特殊情况)
+            mountedRootElement = fragment.firstElementChild; // 假设第一个子元素是根
+            targetElement.appendChild(fragment); // 将组件内容添加到目标元素
         }
 
-        // 9. 执行 onMount 生命周期钩子
+        // B.12: 执行 onMount 生命周期钩子 (如果组件脚本中定义了 onMount)
+        // 仅当组件成功挂载 (mountedRootElement 存在) 且脚本作用域有效时执行
         if (mountedRootElement && componentScope && typeof componentScope.onMount === "function") {
             try {
-                await componentScope.onMount(); // onMount 自身可以是 async
+                await componentScope.onMount(); // onMount 钩子本身可以是异步函数
             } catch (error) {
-                console.error(`核心错误：执行 onMount 钩子时出错 (${componentName}):`, error);
+                console.error(`核心错误：[${componentName}] 执行 onMount 钩子时出错:`, error);
             }
-            // 注册 onUnmount 钩子
+            // 如果 onMount 存在，则检查并注册 onUnmount 钩子
+            // onUnmount 钩子会在组件被卸载时 (通过 cleanupAndRemoveNode) 调用
             if (typeof componentScope.onUnmount === "function") {
                 componentCleanupRegistry.set(mountedRootElement, componentScope.onUnmount);
             }
         }
-        return mountedRootElement; // 返回挂载的根元素
+        return mountedRootElement; // 返回挂载的组件根元素 (或 null 如果挂载失败)
+
     } catch (error) {
-        console.error(`核心错误：挂载组件 ${versionedComponentUrl} (源: ${originalAbsoluteUrl}) 失败:`, error);
-        // 在目标位置显示错误信息
+        // 捕获整个挂载过程中的任何未处理异常
+        console.error(`核心错误：挂载组件 ${componentName} (源文件: ${originalAbsoluteUrl}, 版本化URL: ${versionedComponentUrl}) 失败:`, error);
+        // 尝试在目标位置显示错误信息，以便开发者感知
         if (targetElement instanceof Element && !isPlaceholder) {
-            targetElement.innerHTML = `<p style="color:red;">组件 ${componentName} 加载或渲染失败。详情见控制台。</p>`;
+            targetElement.innerHTML = `<p style="color:red;">组件 ${componentName} (源: ${originalAbsoluteUrl}) 加载或渲染失败。详情请查看控制台。</p>`;
         } else if (isPlaceholder && targetElement.parentNode) {
-            const errorNode = document.createTextNode(` [组件 ${componentName} (源: ${originalAbsoluteUrl}) 渲染错误] `);
+            // 如果是占位符，在其后插入错误文本节点
+            const errorNode = document.createTextNode(` [组件 ${componentName} (源: ${originalAbsoluteUrl}) 渲染错误，详见控制台] `);
             targetElement.parentNode.insertBefore(errorNode, targetElement.nextSibling);
         }
-        return null;
+        return null; // 挂载失败，返回 null
     }
-}
-
-// 公开的组件挂载函数
-function mountComponent(
-    componentFile, // 要挂载的组件文件路径
-    targetSelectorOrElement, // 挂载目标
-    initialProps = {}, // 初始 props
-    eventHandlers = {}, // (子组件用) 事件处理器
-    componentNameSuggestion, // (子组件用) 组件名提示
-    parsedSlots = {}, // (子组件用) 已编译插槽
-    baseResolutionUrlOverride, // (子组件用) 路径解析基准 URL
-) {
-    // 解析组件文件的版本化 URL 和原始绝对 URL
-    const { versionedUrl, originalUrl } = getVersionedAndOriginalUrls(componentFile, baseResolutionUrlOverride || null);
-
-    // 确定组件名
-    let finalComponentName = componentNameSuggestion;
-    if (!finalComponentName) {
-        // 通常是根组件
-        const nameParts = originalUrl.substring(originalUrl.lastIndexOf("/") + 1).split(".");
-        finalComponentName = nameParts[0] || "组件";
-    }
-
-    // 调用内部挂载函数
-    return _mountComponentInternal(
-        versionedUrl,
-        targetSelectorOrElement,
-        initialProps,
-        eventHandlers,
-        finalComponentName,
-        parsedSlots,
-        originalUrl, // 传递原始绝对 URL
-    );
 }
 
 // 暴露核心 API 到 window.NueCore
