@@ -7,6 +7,23 @@ const NueCoreConfig = {
 // 全局变量，用于追踪当前正在执行的 effect 函数
 let currentEffect = null;
 
+// --- 新增: Effect 自动清理机制相关 ---
+// _currentEffectCleanupList: 一个临时的数组，用于在特定组件挂载期间收集该组件内部创建的 Effect 的清理函数。
+// 当一个组件开始挂载 (在 mountComponent 内部，执行其脚本之前)，这个变量会被设置为一个新的空数组。
+// 在该组件脚本执行期间，任何通过 createEffect (或间接通过 createWatch) 创建的 Effect，
+// 其返回的清理函数 (stopEffect) 都会被添加到这个数组中。
+// 组件挂载流程结束后 (或出错时在 finally 块中)，这个变量会被恢复到它之前的值 (通常是 null 或父组件的列表)。
+let _currentEffectCleanupList = null;
+
+// componentEffectsRegistry: 一个 WeakMap，用于存储组件实例与其自动管理的 Effect 清理函数之间的映射。
+// 键 (Key): 组件成功挂载后，其在 DOM 中的根元素 (mountedRootElement)。使用 WeakMap 是因为当组件根元素被垃圾回收时，
+//           相关的 Effect 清理函数集合也应该能被自动回收，避免内存泄漏。
+// 值 (Value): 一个 Set 集合，包含所有在该组件内部创建并需要自动清理的 Effect 的 stop 函数。
+//           当组件被卸载时 (通过 cleanupAndRemoveNode)，框架会查找此注册表，
+//           并执行与该组件根元素关联的所有 stop 函数，以停止这些 Effect 并释放其资源。
+const componentEffectsRegistry = new WeakMap();
+// --- 结束新增 ---
+
 /**
  * 创建一个响应式数据单元 (Signal)。
  * @param {*} initialValue - Signal 的初始值。
@@ -103,13 +120,6 @@ function createEffect(fn) {
         }
     }
 
-    // 首次立即执行 effect 以建立初始依赖
-    try {
-        effect();
-    } catch (e) {
-        console.error("Error during initial effect execution:", e);
-    }
-
     // 返回一个清理函数
     const stopEffect = () => {
         if (effect.isActive) {
@@ -119,8 +129,25 @@ function createEffect(fn) {
         }
     };
 
+    // --- 新增: 自动注册到当前组件的清理列表 ---
+    // 如果 _currentEffectCleanupList 当前是一个有效的数组 (意味着正处于某个组件的挂载/脚本执行上下文中)，
+    // 则将此 effect 的清理函数 stopEffect 添加到该列表中。
+    // 这样，当该组件被卸载时，框架可以自动调用这些 stopEffect 函数。
+    if (_currentEffectCleanupList && Array.isArray(_currentEffectCleanupList)) {
+        _currentEffectCleanupList.push(stopEffect);
+    }
+    // --- 结束新增 ---
+
+    // 首次立即执行 effect 以建立初始依赖
+    try {
+        effect();
+    } catch (e) {
+        console.error("Error during initial effect execution:", e);
+    }
+
     return stopEffect;
 }
+
 
 /**
  * 监听一个 Signal 的变化，并在其值改变时执行回调函数。
@@ -887,13 +914,30 @@ function cleanupAndRemoveNode(node) {
             // 递归清理子节点
             Array.from(node.childNodes).forEach((child) => cleanupAndRemoveNode(child));
         }
-        // 执行卸载回调 (onUnmount)
+
+        // --- 新增: 执行自动注册的 Effect 清理 ---
+        // 检查 componentEffectsRegistry 中是否存在与当前节点 (应为组件根元素) 关联的 Effect 清理函数集合。
+        if (componentEffectsRegistry.has(node)) {
+            const effectsToStop = componentEffectsRegistry.get(node);
+            // console.log(`[${node.tagName || 'Node'}] Auto-cleaning ${effectsToStop.size} effects.`); // 调试信息
+            effectsToStop.forEach(stopFn => {
+                try {
+                    stopFn(); // 执行每个 Effect 的清理函数
+                } catch (error) {
+                    console.error(`核心错误：自动清理 Effect 时出错 (元素: ${node.tagName || 'Node'}):`, error);
+                }
+            });
+            componentEffectsRegistry.delete(node); // 清理完成后，从注册表中移除该条目，防止重复执行或内存占用
+        }
+        // --- 结束新增 ---
+
+        // 执行用户定义的卸载回调 (onUnmount)
         const cleanupCallback = componentCleanupRegistry.get(node);
         if (typeof cleanupCallback === "function") {
             try {
                 cleanupCallback();
             } catch (error) {
-                console.error(`核心错误：执行 onUnmount 钩子时出错 (元素: ${node.tagName}):`, error);
+                console.error(`核心错误：执行 onUnmount 钩子时出错 (元素: ${node.tagName || 'Node'}):`, error);
             }
             componentCleanupRegistry.delete(node); // 移除回调
         }
@@ -903,7 +947,6 @@ function cleanupAndRemoveNode(node) {
         node.parentNode.removeChild(node);
     }
 }
-
 
 /**
  * 挂载组件的核心函数。
@@ -926,68 +969,51 @@ function cleanupAndRemoveNode(node) {
  * @returns {Promise<Element|null>} 一个 Promise，解析为挂载的组件的根DOM元素；如果挂载失败，则解析为 null。
  */
 async function mountComponent(
-    componentFile, // 参数: 要挂载的组件文件路径 (字符串)
-    targetSelectorOrElement, // 参数: 挂载目标 (DOM选择器字符串, Element对象, 或 Comment对象)
-    initialProps = {}, // 参数: 传递给组件的初始 props (对象)
-    eventHandlers = {}, // 参数: (供子组件使用) 父组件提供的事件处理器 (对象)
-    componentNameSuggestion, // 参数: (供子组件使用) 建议的组件名 (字符串, 可选)
-    parsedSlots = {}, // 参数: (供子组件使用) 父组件传入的、已经编译好的插槽内容 (对象)
-    baseResolutionUrlOverride, // 参数: (供子组件使用) 用于解析 componentFile 的基准URL (字符串, 可选)
+    componentFile,
+    targetSelectorOrElement,
+    initialProps = {},
+    eventHandlers = {},
+    componentNameSuggestion,
+    parsedSlots = {},
+    baseResolutionUrlOverride,
 ) {
     // --- 步骤 A: 解析 URL 和确定组件名 (此部分逻辑源自原公开的 mountComponent) ---
-
-    // A.1: 解析组件文件的版本化 URL 和原始绝对 URL
-    // componentFile: 可能是相对路径或绝对路径
-    // baseResolutionUrlOverride: 如果提供，则作为解析 componentFile 的基准；否则，resolveUrl 内部会使用 window.location
     const { versionedUrl: versionedComponentUrl, originalUrl: originalAbsoluteUrl } = getVersionedAndOriginalUrls(
         componentFile,
         baseResolutionUrlOverride || null
     );
 
-    // A.2: 确定最终的组件名，用于日志、调试和事件处理器
-    let componentName = componentNameSuggestion; // 优先使用建议的组件名 (通常在挂载子组件时由父组件的标签名提供)
+    let componentName = componentNameSuggestion;
     if (!componentName) {
-        // 如果没有建议名称 (通常是挂载根组件时)，则从组件的原始 URL 中提取
-        // 例如: "/path/to/MyComponent.nue" -> "MyComponent"
         const fileName = originalAbsoluteUrl.substring(originalAbsoluteUrl.lastIndexOf("/") + 1);
-        const nameParts = fileName.split("."); // "MyComponent.nue" -> ["MyComponent", "nue"]
-        componentName = nameParts[0] || "组件"; // 取文件名部分，如果为空则默认为 "组件"
+        const nameParts = fileName.split(".");
+        componentName = nameParts[0] || "组件";
     }
 
-    // --- 步骤 B: 组件挂载核心逻辑 (此部分逻辑源自原 _mountComponentInternal) ---
-    // 使用上面解析得到的 versionedComponentUrl, originalAbsoluteUrl, componentName
-    // 以及传入的 targetSelectorOrElement, initialProps, eventHandlers, parsedSlots
+    // --- 步骤 B: 组件挂载核心逻辑 ---
+    let targetElement = null;
+    let isPlaceholder = false;
 
-    let targetElement = null; // 挂载的目标 DOM 元素或注释节点
-    let isPlaceholder = false; // 标记 targetElement 是否为注释占位符
-
-    // B.1: 解析挂载目标 (targetSelectorOrElement)
     if (typeof targetSelectorOrElement === "string") {
-        // 如果是字符串，则视为 CSS 选择器
         targetElement = document.querySelector(targetSelectorOrElement);
         if (!targetElement) {
             console.error(`核心错误：[${componentName}] 挂载失败，找不到目标元素 "${targetSelectorOrElement}"`);
-            return null; // 找不到目标，无法继续
+            return null;
         }
     } else if (targetSelectorOrElement instanceof Element || targetSelectorOrElement instanceof Comment) {
-        // 如果是 Element 或 Comment 节点，则直接使用
         targetElement = targetSelectorOrElement;
-        isPlaceholder = targetSelectorOrElement instanceof Comment; // 检查是否为注释节点 (用于子组件占位符)
+        isPlaceholder = targetSelectorOrElement instanceof Comment;
         if (isPlaceholder && !targetElement.parentNode) {
-            // 如果是占位符，但已从 DOM 中移除，则无法挂载
             console.error(`核心错误：[${componentName}] 挂载失败，注释占位符已脱离 DOM`);
             return null;
         }
     } else {
-        // 无效的目标类型
         console.error(`核心错误：[${componentName}] 挂载失败，无效的目标类型:`, targetSelectorOrElement);
         return null;
     }
 
-    // B.2: 检查核心依赖 (Acorn 解析器, NueDirectives 指令处理器)
     if (typeof window.acorn === "undefined") {
         console.error(`核心错误：[${componentName}] Acorn 解析器 (acorn.js) 未加载！`);
-        // 如果目标是元素且不是占位符，尝试在目标元素内显示错误信息
         if (targetElement instanceof Element && !isPlaceholder) {
             targetElement.innerHTML = `<p style="color: red;">错误：[${componentName}] Acorn 解析器 (acorn.js) 未加载</p>`;
         }
@@ -1001,127 +1027,130 @@ async function mountComponent(
         return null;
     }
 
+    // --- 新增: 为当前组件实例准备 Effect 清理列表 ---
+    // effectsForThisComponent: 存储在此次 mountComponent 调用期间，为当前组件创建的所有 Effect 的清理函数。
+    const effectsForThisComponent = [];
+    // previousEffectCleanupList: 保存外部（可能是父组件）的 Effect 清理列表。
+    // 这对于处理嵌套组件挂载至关重要，确保每个组件的 Effect 都被正确地收集到其自身的列表中。
+    const previousEffectCleanupList = _currentEffectCleanupList;
+    // _currentEffectCleanupList: 将全局指针指向当前组件的列表。
+    // 在接下来的 executeScript 和 compileNode 过程中，任何 createEffect 调用都会将其清理函数添加到 effectsForThisComponent。
+    _currentEffectCleanupList = effectsForThisComponent;
+    // --- 结束新增 ---
+
+    let mountedRootElement = null; // 实际挂载到 DOM 树上的组件根元素
+
     try {
-        // B.3: 获取组件的文本内容 (可能来自网络、localStorage 或内存缓存)
-        // 使用 versionedComponentUrl 进行请求和缓存键操作，originalAbsoluteUrl 用于元数据和日志
+        // B.3: 获取组件的文本内容
         const componentText = await fetchAndCacheComponentText(versionedComponentUrl, originalAbsoluteUrl);
         let cacheEntry = componentCache.get(versionedComponentUrl);
         if (!cacheEntry) {
-            // 正常情况下 fetchAndCacheComponentText 会创建或更新内存缓存条目
             console.error(`核心严重错误：组件 ${componentName} (${versionedComponentUrl}) 文本已获取，但内存缓存条目丢失！将尝试重新创建。`);
             cacheEntry = { text: componentText, structure: null, ast: null, originalUrl: originalAbsoluteUrl };
             componentCache.set(versionedComponentUrl, cacheEntry);
         }
 
-        // B.4: 解析组件结构 (<template>, <script>, <style> 块)
-        // 如果内存缓存中尚无结构信息，则进行解析并缓存
+        // B.4: 解析组件结构
         if (!cacheEntry.structure) {
             cacheEntry.structure = parseComponentStructure(componentText, versionedComponentUrl);
         }
         const { template, script, style } = cacheEntry.structure;
 
-        // B.5: 使用 Acorn 解析 <script> 内容为 AST (抽象语法树)
-        // 仅当脚本内容非空且内存缓存中尚无 AST 时进行解析并缓存
+        // B.5: 使用 Acorn 解析 <script> 内容为 AST
         if (script.trim() && !cacheEntry.ast) {
             cacheEntry.ast = parseScriptWithAcorn(script, versionedComponentUrl);
         }
-        const ast = cacheEntry.ast; // ast 可能为 null (如果脚本为空或解析失败)
+        const ast = cacheEntry.ast;
 
-        // B.6: 执行组件的 <script> 块，获取其作用域对象
-        // executeScript 是异步的，因为它可能包含顶层 await (例如，通过 importNjs)
-        // initialProps: 传递给脚本的 props
-        // emit: 创建一个 emit 函数，供脚本内部调用以触发父组件事件 (通过 eventHandlers)
-        // originalAbsoluteUrl: 作为脚本内部 importNjs 解析相对路径的基准 URL
+        // B.6: 执行组件的 <script> 块
         const emit = createEmitFunction(eventHandlers, componentName);
         const componentScope = await executeScript(script, ast, initialProps, emit, originalAbsoluteUrl);
 
-        // B.7: 将父组件传入的、已编译的插槽内容 ($slots) 注入到子组件的作用域中
-        // parsedSlots 是一个对象，键是插槽名，值是 DocumentFragment (包含已编译的节点)
+        // B.7: 将父组件传入的插槽内容注入子组件作用域
         if (componentScope && typeof componentScope === "object") {
             componentScope.$slots = parsedSlots;
         } else {
-            // 如果脚本未返回有效的对象作用域，则无法注入 $slots
-            if (componentScope !== null && typeof componentScope !== 'undefined') { // 避免对 null/undefined 调用 typeof
+            if (componentScope !== null && typeof componentScope !== 'undefined') {
                 console.warn(`核心警告：组件 ${componentName} 的脚本已执行，但未返回有效的对象作用域 (实际返回: ${typeof componentScope})，无法注入 $slots。`);
             } else {
                  console.warn(`核心警告：组件 ${componentName} 的脚本执行后返回 ${componentScope}，无法注入 $slots。`);
             }
         }
 
-        // B.8: 根据组件的 <template> 内容创建 DOM 片段
-        const fragment = document.createDocumentFragment(); // 使用 DocumentFragment 以提高性能
-        const tempDiv = document.createElement("div"); // 临时容器，用于解析 HTML 字符串
-        tempDiv.innerHTML = template.trim(); // 解析模板 HTML
+        // B.8: 根据模板创建 DOM 片段
+        const fragment = document.createDocumentFragment();
+        const tempDiv = document.createElement("div");
+        tempDiv.innerHTML = template.trim();
         while (tempDiv.firstChild) {
-            fragment.appendChild(tempDiv.firstChild); // 将解析后的节点移到 fragment
+            fragment.appendChild(tempDiv.firstChild);
         }
-
-        // 记录片段中的第一个元素，这可能是组件的根元素 (如果模板非空且有顶级元素)
         const potentialRootElementInFragment = fragment.firstElementChild;
 
-        // B.9: 编译 DOM 片段 (处理指令、插值、子组件、<slot> 标签等)
-        // compileNode 会递归处理片段中的所有节点
-        // componentScope: 当前组件的作用域，用于解析表达式
-        // window.NueDirectives: 指令处理器集合
-        // componentName: 当前组件的名称，用于日志和子组件命名
-        // originalAbsoluteUrl: 作为编译过程中解析子组件相对路径的基准 URL
+        // B.9: 编译 DOM 片段
         Array.from(fragment.childNodes).forEach((node) =>
             compileNode(node, componentScope, window.NueDirectives, componentName, originalAbsoluteUrl)
         );
 
-        // B.10: 注入组件的 <style> 内容到文档的 <head> 中
-        // originalAbsoluteUrl 用于生成唯一的 style 标签 ID，防止重复注入
+        // B.10: 注入样式
         injectStyles(style, originalAbsoluteUrl);
 
-        // B.11: 将编译好的 DOM 片段挂载到目标位置
-        let mountedRootElement = null; // 实际挂载到 DOM 树上的组件根元素 (如果有)
+        // B.11: 挂载 DOM 片段
         if (isPlaceholder) {
-            // 如果目标是注释占位符 (通常用于子组件)
             const parent = targetElement.parentNode;
             if (parent) {
-                parent.insertBefore(fragment, targetElement); // 在占位符之前插入组件内容
-                mountedRootElement = potentialRootElementInFragment; // 假设第一个子元素是根
-                parent.removeChild(targetElement); // 移除占位符注释节点
+                parent.insertBefore(fragment, targetElement);
+                mountedRootElement = potentialRootElementInFragment;
+                parent.removeChild(targetElement);
             } else {
-                // 这种情况理论上已在 B.1 中处理 (isPlaceholder && !targetElement.parentNode)
                 console.warn(`核心警告：[${componentName}] 尝试挂载到已脱离 DOM 的占位符，操作可能未生效。`);
             }
         } else {
-            // 如果目标是普通 DOM 元素 (通常用于根组件或替换元素内容)
-            cleanupAndRemoveNode(targetElement.firstChild); // 清理目标元素内的所有现有子节点及其关联的 effect/钩子
-            targetElement.innerHTML = ""; // 再次确保清空 (以防 cleanupAndRemoveNode 有特殊情况)
-            mountedRootElement = fragment.firstElementChild; // 假设第一个子元素是根
-            targetElement.appendChild(fragment); // 将组件内容添加到目标元素
+            cleanupAndRemoveNode(targetElement.firstChild); // 清理目标元素内所有现有子节点
+            targetElement.innerHTML = "";
+            mountedRootElement = fragment.firstElementChild;
+            targetElement.appendChild(fragment);
         }
 
-        // B.12: 执行 onMount 生命周期钩子 (如果组件脚本中定义了 onMount)
-        // 仅当组件成功挂载 (mountedRootElement 存在) 且脚本作用域有效时执行
+        // --- 新增: 关联收集到的 Effect 清理函数与组件根元素 ---
+        // 在组件的 DOM 结构已构建完毕 (mountedRootElement 已确定) 之后，
+        // 如果当前组件的 Effect 清理列表 (effectsForThisComponent) 不为空，
+        // 则将这个列表 (以 Set 的形式) 存储到 componentEffectsRegistry 中，
+        // 使用 mountedRootElement 作为键。
+        if (mountedRootElement && effectsForThisComponent.length > 0) {
+            componentEffectsRegistry.set(mountedRootElement, new Set(effectsForThisComponent));
+            // console.log(`[${componentName}] Registered ${effectsForThisComponent.length} effects for auto-cleanup.`); // 调试信息
+        }
+        // --- 结束新增 ---
+
+        // B.12: 执行 onMount 生命周期钩子
         if (mountedRootElement && componentScope && typeof componentScope.onMount === "function") {
             try {
-                await componentScope.onMount(); // onMount 钩子本身可以是异步函数
+                await componentScope.onMount();
             } catch (error) {
                 console.error(`核心错误：[${componentName}] 执行 onMount 钩子时出错:`, error);
             }
-            // 如果 onMount 存在，则检查并注册 onUnmount 钩子
-            // onUnmount 钩子会在组件被卸载时 (通过 cleanupAndRemoveNode) 调用
             if (typeof componentScope.onUnmount === "function") {
                 componentCleanupRegistry.set(mountedRootElement, componentScope.onUnmount);
             }
         }
-        return mountedRootElement; // 返回挂载的组件根元素 (或 null 如果挂载失败)
+        return mountedRootElement;
 
     } catch (error) {
-        // 捕获整个挂载过程中的任何未处理异常
         console.error(`核心错误：挂载组件 ${componentName} (源文件: ${originalAbsoluteUrl}, 版本化URL: ${versionedComponentUrl}) 失败:`, error);
-        // 尝试在目标位置显示错误信息，以便开发者感知
         if (targetElement instanceof Element && !isPlaceholder) {
             targetElement.innerHTML = `<p style="color:red;">组件 ${componentName} (源: ${originalAbsoluteUrl}) 加载或渲染失败。详情请查看控制台。</p>`;
         } else if (isPlaceholder && targetElement.parentNode) {
-            // 如果是占位符，在其后插入错误文本节点
             const errorNode = document.createTextNode(` [组件 ${componentName} (源: ${originalAbsoluteUrl}) 渲染错误，详见控制台] `);
             targetElement.parentNode.insertBefore(errorNode, targetElement.nextSibling);
         }
-        return null; // 挂载失败，返回 null
+        return null;
+    } finally {
+        // --- 新增: 恢复外部的 Effect 清理列表 ---
+        // 无论 mountComponent 成功与否，在最后都必须将 _currentEffectCleanupList
+        // 恢复到它在进入此函数之前的值 (previousEffectCleanupList)。
+        // 这是为了确保当嵌套组件挂载完成后，外部组件 (父组件) 的 Effect 收集上下文能够正确恢复。
+        _currentEffectCleanupList = previousEffectCleanupList;
+        // --- 结束新增 ---
     }
 }
 
