@@ -141,6 +141,13 @@ function createEffect(fn) {
     return stopEffect;
 }
 
+// 兼容queueMicrotask
+if (typeof queueMicrotask !== "function") {
+    window.queueMicrotask = function (cb) {
+        Promise.resolve().then(cb);
+    };
+}
+
 /**
  * 监听一个 Signal 的变化，并在其值改变时执行回调函数。
  * @param {Function} signalToWatch - 由 createSignal 创建的响应式变量的访问器函数。
@@ -588,7 +595,6 @@ function parseScriptWithAcorn(scriptContent, versionedUrl) {
     }
 }
 
-
 /**
  * 内部函数，用于执行 NJS 脚本内容。支持顶层 await。
  * @param {string} scriptContent - NJS 文件的 JavaScript 文本内容。
@@ -615,20 +621,19 @@ async function _executeNjsScript(scriptContent, njsVersionedUrl, njsOriginalUrl)
             const urlObj = new URL(njsOriginalUrl);
             dynamicNjsName = `${urlObj.pathname}.temp.js`;
         } catch (e) {
-            dynamicNjsName = `${njsOriginalUrl.replace(/[?#].*$/, '')}.temp.js`;
+            dynamicNjsName = `${njsOriginalUrl.replace(/[?#].*$/, "")}.temp.js`;
         }
         dynamicNjsName = encodeURI(dynamicNjsName);
 
         const njsFunction = new Function("importNjs", `return (async () => { \n${scriptContent}\n })(); \n//# sourceURL=${dynamicNjsName}`);
-        
+
         const resultPromise = njsFunction(boundImportNjs);
         return await resultPromise;
-
-    } catch (error) { // 捕获来自 new Function 或 await resultPromise 的错误
+    } catch (error) {
+        // 捕获来自 new Function 或 await resultPromise 的错误
         throw error; // 重新抛出原始错误
     }
 }
-
 
 /**
  * 核心的 NJS 模块加载和执行函数。这是实现 `importNjs` 功能的主体。
@@ -706,7 +711,7 @@ async function executeScript(scriptContent, ast, initialProps = {}, emit = () =>
             const urlObj = new URL(componentOriginalUrl);
             dynamicScriptName = `${urlObj.pathname}.temp.js`;
         } catch (e) {
-            dynamicScriptName = `${componentOriginalUrl.replace(/[?#].*$/, '')}.temp.js`;
+            dynamicScriptName = `${componentOriginalUrl.replace(/[?#].*$/, "")}.temp.js`;
         }
         dynamicScriptName = encodeURI(dynamicScriptName);
 
@@ -721,7 +726,8 @@ async function executeScript(scriptContent, ast, initialProps = {}, emit = () =>
         } else {
             throw err; // 抛出错误以中断流程
         }
-    } catch (error) { // 捕获来自 new Function 或 await componentScopePromise 的错误
+    } catch (error) {
+        // 捕获来自 new Function 或 await componentScopePromise 的错误
         throw error; // 重新抛出原始错误，让上层处理
     }
 }
@@ -921,7 +927,7 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                     slotsDataForChild[sName] = {
                         nodes: rawSlotContents[sName], // 原始DOM节点数组 (已克隆)
                         parentScope: scope, // 定义这些插槽内容时的父组件作用域
-                        parentContextOriginalUrl: currentContextOriginalUrl // 父组件的原始URL，用于解析插槽内容中可能存在的相对路径子组件
+                        parentContextOriginalUrl: currentContextOriginalUrl, // 父组件的原始URL，用于解析插槽内容中可能存在的相对路径子组件
                     };
                 }
             }
@@ -935,8 +941,7 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             element.parentNode.replaceChild(placeholder, element);
 
             // 异步挂载子组件，传递 props、事件处理器、组件名建议、插槽数据和子组件的原始URL
-            mountComponent(childVersionedUrl, placeholder, initialProps, eventHandlers, tagName, slotsDataForChild, childOriginalUrl)
-                .catch((error) => console.error(`核心错误：[${parentComponentName}] 异步挂载子组件 <${tagName}> (${childVersionedUrl}) 失败:`, error));
+            mountComponent(childVersionedUrl, placeholder, initialProps, eventHandlers, tagName, slotsDataForChild, childOriginalUrl).catch((error) => console.error(`核心错误：[${parentComponentName}] 异步挂载子组件 <${tagName}> (${childVersionedUrl}) 失败:`, error));
             return; // 子组件已处理，不再继续编译此节点
         }
 
@@ -964,10 +969,10 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                 if (slotDataFromParent && slotDataFromParent.nodes && slotDataFromParent.nodes.length > 0) {
                     // 如果父组件为此插槽提供了内容
                     const { nodes: rawNodesToCompile, parentScope: slotContentParentScope, parentContextOriginalUrl: slotContentParentContextUrl } = slotDataFromParent;
-                    
+
                     const contentFragmentForSlot = document.createDocumentFragment();
                     // 克隆父组件提供的原始DOM节点到新的 DocumentFragment 中
-                    rawNodesToCompile.forEach(rawNode => contentFragmentForSlot.appendChild(rawNode.cloneNode(true)));
+                    rawNodesToCompile.forEach((rawNode) => contentFragmentForSlot.appendChild(rawNode.cloneNode(true)));
 
                     // 使用父组件的作用域 (slotContentParentScope) 和父组件的上下文URL (slotContentParentContextUrl)
                     // 来编译这些克隆后的插槽内容节点。
@@ -980,7 +985,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                 } else {
                     // 如果父组件未提供内容，则渲染 <slot> 标签的后备内容
                     const fallbackFragment = document.createDocumentFragment();
-                    while (element.firstChild) { // 移动 <slot> 标签的所有子节点 (即后备内容) 到 fallbackFragment
+                    while (element.firstChild) {
+                        // 移动 <slot> 标签的所有子节点 (即后备内容) 到 fallbackFragment
                         fallbackFragment.appendChild(element.firstChild);
                     }
                     // 后备内容的编译作用域是当前子组件的 scope，上下文URL也是子组件的
@@ -1083,7 +1089,6 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
         }
     }
 }
-
 
 /**
  * 将组件的 CSS 样式注入到文档的 <head> 中。

@@ -1,44 +1,42 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
-<head>
-    <meta charset="UTF-8">
-    <title>Nue 组件 Demo (带指令)</title>
-    <!-- 样式将由 core.js 动态注入 -->
-</head>
-<body>
+    <head>
+        <meta charset="UTF-8" />
+        <title>Nue 组件 Demo (带指令)</title>
+        <!-- 样式将由 core.js 动态注入 -->
+    </head>
+    <body>
+        <!-- 组件将挂载到这里 -->
+        <div id="app">
+            <p>正在加载组件...</p>
+        </div>
 
-    <!-- 组件将挂载到这里 -->
-    <div id="app">
-        <p>正在加载组件...</p>
-    </div>
+        <!-- 1. 引入 Acorn 解析器 -->
+        <!-- 从 CDN 或本地下载 -->
+        <!-- <script src="https://unpkg.com/acorn/dist/acorn.js"></script> -->
+        <!-- 或者下载 acorn.js 文件放到同目录下: <script src="acorn.js"></script> -->
+        <script src="acorn.js"></script>
 
-    <!-- 1. 引入 Acorn 解析器 -->
-    <!-- 从 CDN 或本地下载 -->
-    <!-- <script src="https://unpkg.com/acorn/dist/acorn.js"></script> -->
-    <!-- 或者下载 acorn.js 文件放到同目录下: <script src="acorn.js"></script> -->
-    <script src="acorn.js"></script>
+        <!-- 2. 引入核心库 -->
+        <script src="nono-core.js"></script>
 
-    <!-- 2. 引入核心库 -->
-    <script src="nono-core.js"></script>
+        <!-- 3. 引入指令处理器 -->
+        <script src="nono-directives.js"></script>
 
-    <!-- 3. 引入指令处理器 -->
-    <script src="nono-directives.js"></script>
-
-    <!-- 4. 启动应用 -->
-    <script>
-        document.addEventListener('DOMContentLoaded', () => {
-            if (window.NueCore && typeof window.NueCore.init === 'function') {
-                // 参数: 挂载目标ID, 根组件文件, 应用版本号 (可选), 初始Props (可选)
-                window.NueCore.init('app', 'demo.nue', Date.now()); 
-            } else {
-                console.error("NueCore.js 或其 init 函数未能正确加载！");
-                const appDiv = document.getElementById('app');
-                if (appDiv) {
-                    appDiv.innerHTML = '<p style="color:red;">核心库加载失败！请检查控制台错误。</p>';
+        <!-- 4. 启动应用 -->
+        <script>
+            document.addEventListener("DOMContentLoaded", () => {
+                if (window.NueCore && typeof window.NueCore.init === "function") {
+                    // 参数: 挂载目标ID, 根组件文件, 应用版本号 (可选), 初始Props (可选)
+                    window.NueCore.init("app", "demo.nue", Date.now().toString());
+                } else {
+                    console.error("NueCore.js 或其 init 函数未能正确加载！");
+                    const appDiv = document.getElementById("app");
+                    if (appDiv) {
+                        appDiv.innerHTML = '<p style="color:red;">核心库加载失败！请检查控制台错误。</p>';
+                    }
                 }
-            }
-        });
-    </script>
-
-</body>
+            });
+        </script>
+    </body>
 </html>

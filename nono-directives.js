@@ -82,7 +82,7 @@
     function handleNIf(element, expression, scope, compileFn, directiveHandlers, componentName) {
         const parent = element.parentNode;
         // 创建一个注释节点作为锚点，标记 n-if 内容在 DOM 中的位置
-        const anchor = document.createComment(` n-if anchor for: ${expression} `); 
+        const anchor = document.createComment(` n-if anchor for: ${expression} `);
         if (parent) {
             parent.replaceChild(anchor, element); // 用锚点替换原始的 n-if 元素
         } else {
@@ -94,7 +94,8 @@
         let currentElement = null; // 存储当前因 n-if 为真而显示的元素实例
 
         // 使用 createEffect 监听条件表达式所依赖的 Signal 的变化
-        window.NueCore.createEffect(() => { // 明确使用 window.NueCore.createEffect
+        window.NueCore.createEffect(() => {
+            // 明确使用 window.NueCore.createEffect
             let condition = false; // 默认为 false，以防表达式计算出错
             try {
                 condition = !!evaluateExpression(expression, scope); // 将表达式结果转为布尔值
@@ -103,8 +104,10 @@
                 condition = false;
             }
 
-            if (condition) { // 如果条件为真
-                if (!currentElement) { // 并且当前没有元素显示 (即，之前条件为假或首次渲染)
+            if (condition) {
+                // 如果条件为真
+                if (!currentElement) {
+                    // 并且当前没有元素显示 (即，之前条件为假或首次渲染)
                     // 克隆原始模板元素 (element 参数是原始的、未编译的模板)
                     const clone = element.cloneNode(true);
                     clone.removeAttribute("n-if"); // 从克隆体上移除 n-if 指令，防止无限递归编译
@@ -113,13 +116,15 @@
                     // **关键：每次元素需要显示时，都必须编译这个新的克隆体**
                     // compileFn (即 NueCore.compileNode) 会处理 clone 内部的插值、其他指令等
                     compileFn(clone, scope, directiveHandlers, componentName);
-                    
+
                     // 将编译好的克隆体插入到锚点之后
                     anchor.parentNode?.insertBefore(clone, anchor.nextSibling);
                     currentElement = clone; // 更新 currentElement 为新显示的元素
                 }
-            } else { // 如果条件为假
-                if (currentElement) { // 并且当前有元素正在显示
+            } else {
+                // 如果条件为假
+                if (currentElement) {
+                    // 并且当前有元素正在显示
                     // 使用核心库的清理函数移除元素，这会处理子组件卸载等逻辑
                     window.NueCore.cleanupAndRemoveNode(currentElement);
                     currentElement = null; // 重置 currentElement
@@ -170,13 +175,16 @@
 
         let keyedNodeEntries = new Map(); // 存储 key -> { node, itemSignal, indexSignal, localScope, key }
 
-        window.NueCore.createEffect(() => { // 明确使用 window.NueCore.createEffect
+        window.NueCore.createEffect(() => {
+            // 明确使用 window.NueCore.createEffect
             let newItemsArray;
             try {
                 const iterable = directiveHandlers.evaluateExpression(iterableExpression, scope);
-                if (iterable == null) { // 处理 null 或 undefined
+                if (iterable == null) {
+                    // 处理 null 或 undefined
                     newItemsArray = [];
-                } else if (typeof iterable[Symbol.iterator] === "function") { // 检查是否可迭代
+                } else if (typeof iterable[Symbol.iterator] === "function") {
+                    // 检查是否可迭代
                     newItemsArray = Array.from(iterable);
                 } else {
                     console.warn(`指令警告：[${componentName}] n-for 表达式 "${iterableExpression}" 的结果不是可迭代对象。实际值:`, iterable);
@@ -193,11 +201,16 @@
 
             newItemsArray.forEach((currentItemData, currentIndex) => {
                 let currentItemKey;
-                if (keyExpression) { // 如果指定了 key 表达式
+                if (keyExpression) {
+                    // 如果指定了 key 表达式
                     const keyEvalContext = Object.create(scope);
-                    keyEvalContext[itemAlias] = function () { return currentItemData; };
+                    keyEvalContext[itemAlias] = function () {
+                        return currentItemData;
+                    };
                     if (indexAlias) {
-                        keyEvalContext[indexAlias] = function () { return currentIndex; };
+                        keyEvalContext[indexAlias] = function () {
+                            return currentIndex;
+                        };
                     }
                     try {
                         currentItemKey = String(directiveHandlers.evaluateExpression(keyExpression, keyEvalContext));
@@ -205,7 +218,8 @@
                         console.error(`指令错误：[${componentName}] 计算 n-for 的 key 表达式 "${keyExpression}" 失败 for item:`, currentItemData, "\n临时上下文:", keyEvalContext, e);
                         currentItemKey = `__error_key_at_index_${currentIndex}__`; // 出错时使用基于索引的 key
                     }
-                } else { // 未指定 key，使用索引作为 key
+                } else {
+                    // 未指定 key，使用索引作为 key
                     currentItemKey = String(currentIndex);
                 }
 
@@ -213,12 +227,14 @@
 
                 let entry = keyedNodeEntries.get(currentItemKey); // 尝试复用旧条目
 
-                if (entry) { // 复用现有节点
+                if (entry) {
+                    // 复用现有节点
                     entry.itemSignal(currentItemData); // 更新 item Signal
                     if (entry.indexSignal) {
                         entry.indexSignal(currentIndex); // 更新 index Signal (如果存在)
                     }
-                } else { // 创建新节点
+                } else {
+                    // 创建新节点
                     const clone = templateElement.cloneNode(true);
                     clone.removeAttribute("n-for"); // 从克隆体移除 n-for，防递归
 
@@ -281,7 +297,8 @@
      * @param {string} componentName - 当前组件名。
      */
     function handleNHtml(element, expression, scope, componentName) {
-        window.NueCore.createEffect(() => { // 明确使用 window.NueCore.createEffect
+        window.NueCore.createEffect(() => {
+            // 明确使用 window.NueCore.createEffect
             let htmlContent = "";
             try {
                 htmlContent = String(evaluateExpression(expression, scope) ?? ""); // 处理 null/undefined
@@ -304,7 +321,8 @@
     function handleNShow(element, expression, scope, componentName) {
         // 保存元素原始的 display 值 (如果不是 "none")
         const originalDisplay = element.style.display === "none" ? "" : element.style.display;
-        window.NueCore.createEffect(() => { // 明确使用 window.NueCore.createEffect
+        window.NueCore.createEffect(() => {
+            // 明确使用 window.NueCore.createEffect
             let condition = true; // 默认显示，以防表达式计算出错
             try {
                 condition = !!evaluateExpression(expression, scope);
@@ -334,14 +352,16 @@
         }
 
         // 1. 从 Signal 更新视图 (Model -> View)
-        window.NueCore.createEffect(() => { // 明确使用 window.NueCore.createEffect
+        window.NueCore.createEffect(() => {
+            // 明确使用 window.NueCore.createEffect
             const value = signalAccessor(); // 获取 Signal 的当前值
             if (tagName === "input") {
                 if (inputType === "checkbox") {
                     element.checked = !!value;
                 } else if (inputType === "radio") {
-                    element.checked = (value == element.value); // 使用松散比较，因为 value 可能是数字或字符串
-                } else if (element.value !== String(value ?? "")) { // 对于 text, password 等
+                    element.checked = value == element.value; // 使用松散比较，因为 value 可能是数字或字符串
+                } else if (element.value !== String(value ?? "")) {
+                    // 对于 text, password 等
                     element.value = String(value ?? ""); // 处理 null/undefined 为空字符串
                 }
             } else if ((tagName === "select" || tagName === "textarea") && element.value !== String(value ?? "")) {
@@ -351,7 +371,7 @@
 
         // 2. 从视图更新 Signal (View -> Model)
         // 根据元素类型选择合适的事件 (input 通常更实时，change 用于 select, checkbox, radio)
-        const eventName = (tagName === "select" || inputType === "checkbox" || inputType === "radio") ? "change" : "input";
+        const eventName = tagName === "select" || inputType === "checkbox" || inputType === "radio" ? "change" : "input";
         element.addEventListener(eventName, (event) => {
             const target = event.target;
             let newValue;
@@ -360,7 +380,8 @@
             } else if (inputType === "radio") {
                 if (!target.checked) return; // 只处理被选中的 radio 按钮
                 newValue = target.value;
-            } else { // input[type=text], textarea, select
+            } else {
+                // input[type=text], textarea, select
                 newValue = target.value;
             }
             try {
@@ -381,7 +402,8 @@
      * @param {string} componentName - 当前组件名。
      */
     function handleAttributeBinding(element, attrName, expression, scope, componentName) {
-        window.NueCore.createEffect(() => { // 明确使用 window.NueCore.createEffect
+        window.NueCore.createEffect(() => {
+            // 明确使用 window.NueCore.createEffect
             let value;
             try {
                 value = evaluateExpression(expression, scope);
