@@ -19,7 +19,8 @@ const __NUE_CONFUSION_KEY__ = "NueJS-is-Awesome-And-Secret-!@#$%^"; // 你可以
  * @returns {string} 转换后的文本。如果输入为空或转换出错，则可能返回原始文本。
  */
 function nueSimpleTransform(text, key) {
-    if (!text || !key) { // 如果文本或密钥为空，直接返回文本
+    if (!text || !key) {
+        // 如果文本或密钥为空，直接返回文本
         // console.warn("[NueCore] 文本转换：文本或密钥为空。");
         return text;
     }
@@ -400,99 +401,6 @@ const njsModuleExecutionCache = new Map(); // NJS模块执行结果缓存: { ver
 const _pendingNjsModuleLoads = new Map(); // 进行中的NJS模块加载请求: { versionedUrl -> Promise<moduleData> }
 
 // 辅助函数
-const LOCAL_STORAGE_PREFIX = "nue_component_cache_"; // localStorage 键前缀
-
-/**
- * 从 localStorage 获取缓存的组件/NJS文件文本。
- * @param {string} versionedUrl - 带有版本参数的资源 URL。
- * @returns {string|null} 缓存的文本内容，如果未找到或版本不匹配则返回 null。
- */
-function getComponentFromLocalStorage(versionedUrl) {
-    if (!NueCoreConfig.appVersion) {
-        // 未设置版本号则不使用 localStorage
-        return null;
-    }
-    const cacheKey = LOCAL_STORAGE_PREFIX + versionedUrl;
-    try {
-        const cachedItem = localStorage.getItem(cacheKey);
-        if (cachedItem) {
-            const { text, version } = JSON.parse(cachedItem);
-            // 校验版本号是否匹配当前应用版本
-            if (version === NueCoreConfig.appVersion && typeof text === "string") {
-                return text; // 版本匹配，返回缓存的文本内容
-            } else {
-                localStorage.removeItem(cacheKey); // 版本不匹配或数据损坏，移除无效缓存
-                return null;
-            }
-        }
-    } catch (e) {
-        console.warn(`核心警告：从 localStorage 读取资源 ${versionedUrl} 失败:`, e);
-        try {
-            localStorage.removeItem(cacheKey); // 尝试移除损坏的缓存项
-        } catch (removeError) {
-            /* 忽略移除错误 */
-        }
-        return null;
-    }
-    return null;
-}
-
-/**
- * 将组件/NJS文件文本存入 localStorage。
- * @param {string} versionedUrl - 带有版本参数的资源 URL。
- * @param {string} text - 要缓存的文本内容。
- */
-function setComponentToLocalStorage(versionedUrl, text) {
-    if (!NueCoreConfig.appVersion) {
-        // 未设置版本号则不存入 localStorage
-        return;
-    }
-    const cacheKey = LOCAL_STORAGE_PREFIX + versionedUrl;
-    const itemToStore = JSON.stringify({
-        text: text,
-        version: NueCoreConfig.appVersion,
-    });
-    try {
-        localStorage.setItem(cacheKey, itemToStore);
-    } catch (e) {
-        // 捕获 localStorage 写满等错误
-        console.warn(`核心警告：存入 localStorage 资源 ${versionedUrl} 失败 (可能已满):`, e);
-    }
-}
-
-/**
- * 清理旧版本的 localStorage 缓存。
- * 如果设置了 NueCoreConfig.appVersion，则会遍历 localStorage 中所有以此框架前缀开头的项，
- * 移除与当前应用版本不符的缓存。
- */
-function cleanupOldLocalStorageCache() {
-    if (!NueCoreConfig.appVersion) return; // 没有版本号无法清理
-
-    try {
-        for (let i = 0; i < localStorage.length; i++) {
-            const key = localStorage.key(i);
-            if (key && key.startsWith(LOCAL_STORAGE_PREFIX)) {
-                try {
-                    const item = localStorage.getItem(key);
-                    if (item) {
-                        const { version } = JSON.parse(item);
-                        if (version !== NueCoreConfig.appVersion) {
-                            // 版本不符则移除
-                            localStorage.removeItem(key);
-                            i--; // localStorage.length 会变化，调整索引
-                        }
-                    }
-                } catch (e) {
-                    // 解析错误或项不存在，也移除
-                    localStorage.removeItem(key);
-                    i--;
-                }
-            }
-        }
-    } catch (e) {
-        console.warn("核心警告：清理旧 localStorage 缓存时出错:", e);
-    }
-}
 
 /**
  * 解析 URL，将相对路径转换为基于指定基准 URL 的绝对路径。
@@ -792,7 +700,6 @@ function kebabToCamel(kebabCase) {
     return kebabCase.replace(/-([a-z])/g, (match, letter) => letter.toUpperCase());
 }
 
-
 /**
  * 获取并缓存组件或 NJS 文件的文本内容。
  * 会依次尝试从预加载数据、localStorage、内存缓存获取，如果均未命中，则发起网络请求。
@@ -802,9 +709,9 @@ function kebabToCamel(kebabCase) {
  */
 async function fetchAndCacheComponentText(versionedUrl, originalAbsoluteUrl) {
     // 步骤 1: 检查全局预加载数据 (window.__NUE_PRELOADED_DATA__)
-    if (window.__NUE_PRELOADED_DATA__ && typeof window.__NUE_PRELOADED_DATA__ === 'object' && window.__NUE_PRELOADED_DATA__.hasOwnProperty(originalAbsoluteUrl)) {
+    if (window.__NUE_PRELOADED_DATA__ && typeof window.__NUE_PRELOADED_DATA__ === "object" && window.__NUE_PRELOADED_DATA__.hasOwnProperty(originalAbsoluteUrl)) {
         const confusedTextFromBundle = window.__NUE_PRELOADED_DATA__[originalAbsoluteUrl];
-        
+
         // 对从预加载包中获取的文本进行解混淆
         const preloadedText = nueSimpleTransform(confusedTextFromBundle, __NUE_CONFUSION_KEY__);
 
@@ -823,33 +730,21 @@ async function fetchAndCacheComponentText(versionedUrl, originalAbsoluteUrl) {
         return Promise.resolve(preloadedText); // 直接返回解混淆后的文本
     }
 
-    // 步骤 2: 尝试从 localStorage 获取 (原有逻辑)
-    const localStorageText = getComponentFromLocalStorage(versionedUrl);
-    if (localStorageText !== null) {
-        // 注意：从 localStorage 获取的文本是未混淆的（因为 setComponentToLocalStorage 存储的是原始文本）
-        if (!componentCache.has(versionedUrl)) {
-            componentCache.set(versionedUrl, { text: localStorageText, structure: null, ast: null, originalUrl: originalAbsoluteUrl });
-        } else {
-            componentCache.get(versionedUrl).text = localStorageText;
-        }
-        // console.log(`[NueCore] 已从 localStorage 加载: ${originalAbsoluteUrl}`);
-        return localStorageText; // 直接返回原始文本
-    }
-
-    // 步骤 3: 尝试从内存缓存获取 (原有逻辑)
+    // 步骤 2: 尝试从内存缓存获取 (原有逻辑)
     const memoryCached = componentCache.get(versionedUrl);
-    if (memoryCached && typeof memoryCached.text === 'string') { // 确保 text 存在且是字符串
+    if (memoryCached && typeof memoryCached.text === "string") {
+        // 确保 text 存在且是字符串
         // console.log(`[NueCore] 已从内存缓存加载: ${originalAbsoluteUrl}`);
         return memoryCached.text; // 内存缓存中的文本也应该是原始的
     }
 
-    // 步骤 4: 如果有正在进行的 fetch 请求，则返回该请求的 Promise (原有逻辑)
+    // 步骤 3: 如果有正在进行的 fetch 请求，则返回该请求的 Promise (原有逻辑)
     if (_pendingRequests.has(versionedUrl)) {
         // console.log(`[NueCore] 等待正在进行的请求: ${originalAbsoluteUrl}`);
         return _pendingRequests.get(versionedUrl);
     }
 
-    // 步骤 5: 发起新的 fetch 请求 (原有逻辑)
+    // 步骤 4: 发起新的 fetch 请求 (原有逻辑)
     // console.log(`[NueCore] 发起网络请求: ${originalAbsoluteUrl}`);
     const fetchPromise = fetch(versionedUrl)
         .then((response) => {
@@ -861,7 +756,6 @@ async function fetchAndCacheComponentText(versionedUrl, originalAbsoluteUrl) {
         .then((text) => {
             // 网络获取的是原始文本
             componentCache.set(versionedUrl, { text, structure: null, ast: null, originalUrl: originalAbsoluteUrl });
-            setComponentToLocalStorage(versionedUrl, text); // localStorage 存储原始文本
             _pendingRequests.delete(versionedUrl); // 从挂起请求中移除
             // console.log(`[NueCore] 网络请求成功并缓存: ${originalAbsoluteUrl}`);
             return text;
@@ -1417,10 +1311,6 @@ window.NueCore = {
             }
         }
 
-        if (NueCoreConfig.appVersion) {
-            cleanupOldLocalStorageCache(); // 清理旧版本 localStorage 缓存
-        }
-
         const targetSelector = `#${targetId}`;
         return mountComponent(rootComponentFile, targetSelector, initialProps);
     },
@@ -1429,7 +1319,7 @@ window.NueCore = {
      * 生成一个包含这些数据的 JS 文件，并触发浏览器下载。
      * @param {string} [filename='nue-data-bundle.js'] - 下载的 JS 文件的名称。
      */
-    exportDependencyBundle: function(filename = 'nue-data-bundle.js') {
+    exportDependencyBundle: function (filename = "nue-data-bundle.js") {
         const dataToExport = {};
         let exportedCount = 0;
 
@@ -1437,7 +1327,7 @@ window.NueCore = {
         // componentCache 是在 nono-core.js 顶层作用域定义的，此处可以直接访问
         for (const [versionedUrl, cacheEntry] of componentCache.entries()) {
             // 确保条目有效且包含原始 URL 和文本
-            if (cacheEntry && cacheEntry.originalUrl && typeof cacheEntry.text === 'string') {
+            if (cacheEntry && cacheEntry.originalUrl && typeof cacheEntry.text === "string") {
                 // 对原始文本进行混淆
                 const confusedText = nueSimpleTransform(cacheEntry.text, __NUE_CONFUSION_KEY__);
                 dataToExport[cacheEntry.originalUrl] = confusedText; // 存储混淆后的文本
@@ -1451,7 +1341,7 @@ window.NueCore = {
             const message = "[NueCore.exportDependencyBundle] 缓存中没有找到可导出的组件或NJS模块数据。\n请确保您的应用已加载了至少一个 Nue 组件或 NJS 模块。";
             console.warn(message);
             // 可以使用 alert 提示用户，或者如果环境不允许 alert (例如在某些自动化测试中)，则只打印警告
-            if (typeof alert === 'function') {
+            if (typeof alert === "function") {
                 alert(message);
             }
             return; // 没有数据可导出，直接返回
@@ -1459,13 +1349,13 @@ window.NueCore = {
 
         // 将 dataToExport 对象序列化为一个 JavaScript 字符串，该字符串会定义 window.__NUE_PRELOADED_DATA__
         // 使用 JSON.stringify 的第三个参数 '  ' (两个空格) 来格式化输出的 JSON，使其更易读
-        const dataString = `window.__NUE_PRELOADED_DATA__ = ${JSON.stringify(dataToExport, null, '  ')};`;
+        const dataString = `window.__NUE_PRELOADED_DATA__ = ${JSON.stringify(dataToExport, null, "  ")};`;
 
         // 创建一个 Blob 对象，类型为 'application/javascript'
-        const blob = new Blob([dataString], { type: 'application/javascript;charset=utf-8' });
+        const blob = new Blob([dataString], { type: "application/javascript;charset=utf-8" });
 
         // 创建一个临时的 <a> 标签来触发下载
-        const link = document.createElement('a');
+        const link = document.createElement("a");
         link.href = URL.createObjectURL(blob); // 创建一个指向 Blob 的对象 URL
         link.download = filename; // 设置下载文件的名称
 
