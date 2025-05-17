@@ -5,6 +5,38 @@ const NueCoreConfig = {
     appVersion: null, // 应用版本号，用于缓存控制
 };
 
+/**
+ * @const {string} __NUE_CONFUSION_KEY__
+ * 用于文本混淆的密钥。
+ * 重要提示：此密钥将包含在客户端代码中，因此仅用于轻量级混淆，并非强加密。
+ */
+const __NUE_CONFUSION_KEY__ = "NueJS-is-Awesome-And-Secret-!@#$%^"; // 你可以选择一个更复杂的密钥
+
+/**
+ * 对文本进行简单的异或 (XOR) 转换，用于混淆或解混淆。
+ * @param {string} text - 需要转换的文本。
+ * @param {string} key - 用于转换的密钥。
+ * @returns {string} 转换后的文本。如果输入为空或转换出错，则可能返回原始文本。
+ */
+function nueSimpleTransform(text, key) {
+    if (!text || !key) { // 如果文本或密钥为空，直接返回文本
+        // console.warn("[NueCore] 文本转换：文本或密钥为空。");
+        return text;
+    }
+    let result = "";
+    try {
+        for (let i = 0; i < text.length; i++) {
+            // 将文本字符的 Unicode 码与密钥对应字符的 Unicode 码进行异或操作
+            result += String.fromCharCode(text.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+        }
+    } catch (e) {
+        // 如果在转换过程中发生错误（例如，处理非常规字符时），记录错误并返回原始文本
+        console.error("[NueCore] 文本转换时发生错误:", e, "将返回原始文本。");
+        return text;
+    }
+    return result;
+}
+
 // 全局变量，用于追踪当前正在执行的 effect 函数
 let currentEffect = null;
 
@@ -760,53 +792,83 @@ function kebabToCamel(kebabCase) {
     return kebabCase.replace(/-([a-z])/g, (match, letter) => letter.toUpperCase());
 }
 
+
 /**
  * 获取并缓存组件或 NJS 文件的文本内容。
- * 会依次尝试从 localStorage、内存缓存获取，如果均未命中，则发起网络请求。
+ * 会依次尝试从预加载数据、localStorage、内存缓存获取，如果均未命中，则发起网络请求。
  * @param {string} versionedUrl - 资源的版本化 URL。
  * @param {string} originalAbsoluteUrl - 资源的原始绝对 URL。
  * @returns {Promise<string>} 一个 Promise，解析为资源的文本内容。
  */
 async function fetchAndCacheComponentText(versionedUrl, originalAbsoluteUrl) {
-    // 尝试从 localStorage 获取
+    // 步骤 1: 检查全局预加载数据 (window.__NUE_PRELOADED_DATA__)
+    if (window.__NUE_PRELOADED_DATA__ && typeof window.__NUE_PRELOADED_DATA__ === 'object' && window.__NUE_PRELOADED_DATA__.hasOwnProperty(originalAbsoluteUrl)) {
+        const confusedTextFromBundle = window.__NUE_PRELOADED_DATA__[originalAbsoluteUrl];
+        
+        // 对从预加载包中获取的文本进行解混淆
+        const preloadedText = nueSimpleTransform(confusedTextFromBundle, __NUE_CONFUSION_KEY__);
+
+        // 将解混淆后的文本也放入内存缓存 componentCache，以便后续逻辑可以从中获取
+        // 并且避免对同一资源重复检查 __NUE_PRELOADED_DATA__
+        // componentCache 仍然以 versionedUrl 为键
+        if (!componentCache.has(versionedUrl)) {
+            componentCache.set(versionedUrl, { text: preloadedText, structure: null, ast: null, originalUrl: originalAbsoluteUrl });
+        } else {
+            // 如果已存在（理论上不应该在首次获取时发生，除非有并发或特殊情况），确保文本是最新的
+            const cachedEntry = componentCache.get(versionedUrl);
+            cachedEntry.text = preloadedText;
+            cachedEntry.originalUrl = originalAbsoluteUrl; // 确保 originalUrl 也正确
+        }
+        // console.log(`[NueCore] 已使用预加载数据 (并解混淆) 加载: ${originalAbsoluteUrl}`);
+        return Promise.resolve(preloadedText); // 直接返回解混淆后的文本
+    }
+
+    // 步骤 2: 尝试从 localStorage 获取 (原有逻辑)
     const localStorageText = getComponentFromLocalStorage(versionedUrl);
     if (localStorageText !== null) {
+        // 注意：从 localStorage 获取的文本是未混淆的（因为 setComponentToLocalStorage 存储的是原始文本）
         if (!componentCache.has(versionedUrl)) {
             componentCache.set(versionedUrl, { text: localStorageText, structure: null, ast: null, originalUrl: originalAbsoluteUrl });
         } else {
             componentCache.get(versionedUrl).text = localStorageText;
         }
-        return localStorageText;
+        // console.log(`[NueCore] 已从 localStorage 加载: ${originalAbsoluteUrl}`);
+        return localStorageText; // 直接返回原始文本
     }
 
-    // 尝试从内存缓存获取
+    // 步骤 3: 尝试从内存缓存获取 (原有逻辑)
     const memoryCached = componentCache.get(versionedUrl);
-    if (memoryCached && memoryCached.text) {
-        return memoryCached.text;
+    if (memoryCached && typeof memoryCached.text === 'string') { // 确保 text 存在且是字符串
+        // console.log(`[NueCore] 已从内存缓存加载: ${originalAbsoluteUrl}`);
+        return memoryCached.text; // 内存缓存中的文本也应该是原始的
     }
 
-    // 如果有正在进行的 fetch 请求，则返回该请求的 Promise
+    // 步骤 4: 如果有正在进行的 fetch 请求，则返回该请求的 Promise (原有逻辑)
     if (_pendingRequests.has(versionedUrl)) {
+        // console.log(`[NueCore] 等待正在进行的请求: ${originalAbsoluteUrl}`);
         return _pendingRequests.get(versionedUrl);
     }
 
-    // 发起新的 fetch 请求
+    // 步骤 5: 发起新的 fetch 请求 (原有逻辑)
+    // console.log(`[NueCore] 发起网络请求: ${originalAbsoluteUrl}`);
     const fetchPromise = fetch(versionedUrl)
         .then((response) => {
             if (!response.ok) {
-                throw new Error(`加载资源 ${versionedUrl} 失败: ${response.status} ${response.statusText}`);
+                throw new Error(`加载资源 ${versionedUrl} (原始: ${originalAbsoluteUrl}) 失败: ${response.status} ${response.statusText}`);
             }
             return response.text();
         })
         .then((text) => {
+            // 网络获取的是原始文本
             componentCache.set(versionedUrl, { text, structure: null, ast: null, originalUrl: originalAbsoluteUrl });
-            setComponentToLocalStorage(versionedUrl, text);
+            setComponentToLocalStorage(versionedUrl, text); // localStorage 存储原始文本
             _pendingRequests.delete(versionedUrl); // 从挂起请求中移除
+            // console.log(`[NueCore] 网络请求成功并缓存: ${originalAbsoluteUrl}`);
             return text;
         })
         .catch((error) => {
             _pendingRequests.delete(versionedUrl); // 请求失败也从挂起中移除
-            console.error(`核心错误：获取资源 ${versionedUrl} 文本失败:`, error);
+            console.error(`核心错误：获取资源 ${versionedUrl} (原始: ${originalAbsoluteUrl}) 文本失败:`, error);
             throw error; // 重新抛出错误
         });
 
@@ -1361,6 +1423,61 @@ window.NueCore = {
 
         const targetSelector = `#${targetId}`;
         return mountComponent(rootComponentFile, targetSelector, initialProps);
+    },
+    /**
+     * 导出当前已加载到 componentCache 中的所有组件和 NJS 模块的（混淆后）文本内容。
+     * 生成一个包含这些数据的 JS 文件，并触发浏览器下载。
+     * @param {string} [filename='nue-data-bundle.js'] - 下载的 JS 文件的名称。
+     */
+    exportDependencyBundle: function(filename = 'nue-data-bundle.js') {
+        const dataToExport = {};
+        let exportedCount = 0;
+
+        // 遍历 componentCache，获取每个条目的 originalUrl 和原始文本
+        // componentCache 是在 nono-core.js 顶层作用域定义的，此处可以直接访问
+        for (const [versionedUrl, cacheEntry] of componentCache.entries()) {
+            // 确保条目有效且包含原始 URL 和文本
+            if (cacheEntry && cacheEntry.originalUrl && typeof cacheEntry.text === 'string') {
+                // 对原始文本进行混淆
+                const confusedText = nueSimpleTransform(cacheEntry.text, __NUE_CONFUSION_KEY__);
+                dataToExport[cacheEntry.originalUrl] = confusedText; // 存储混淆后的文本
+                exportedCount++;
+            } else {
+                console.warn(`[NueCore.exportDependencyBundle] 跳过缓存条目 (版本化URL: ${versionedUrl})，因为它缺少 originalUrl 或文本内容。`);
+            }
+        }
+
+        if (exportedCount === 0) {
+            const message = "[NueCore.exportDependencyBundle] 缓存中没有找到可导出的组件或NJS模块数据。\n请确保您的应用已加载了至少一个 Nue 组件或 NJS 模块。";
+            console.warn(message);
+            // 可以使用 alert 提示用户，或者如果环境不允许 alert (例如在某些自动化测试中)，则只打印警告
+            if (typeof alert === 'function') {
+                alert(message);
+            }
+            return; // 没有数据可导出，直接返回
+        }
+
+        // 将 dataToExport 对象序列化为一个 JavaScript 字符串，该字符串会定义 window.__NUE_PRELOADED_DATA__
+        // 使用 JSON.stringify 的第三个参数 '  ' (两个空格) 来格式化输出的 JSON，使其更易读
+        const dataString = `window.__NUE_PRELOADED_DATA__ = ${JSON.stringify(dataToExport, null, '  ')};`;
+
+        // 创建一个 Blob 对象，类型为 'application/javascript'
+        const blob = new Blob([dataString], { type: 'application/javascript;charset=utf-8' });
+
+        // 创建一个临时的 <a> 标签来触发下载
+        const link = document.createElement('a');
+        link.href = URL.createObjectURL(blob); // 创建一个指向 Blob 的对象 URL
+        link.download = filename; // 设置下载文件的名称
+
+        // 将 <a> 标签添加到 DOM 中 (某些浏览器需要这样才能触发点击)
+        document.body.appendChild(link);
+        link.click(); // 模拟点击以触发下载
+
+        // 清理：从 DOM 中移除 <a> 标签并释放对象 URL
+        document.body.removeChild(link);
+        URL.revokeObjectURL(link.href);
+
+        console.log(`[NueCore.exportDependencyBundle] ${exportedCount} 个资源的混淆数据已导出为 ${filename}。\n请将此文件包含在您的 HTML 中，并置于 nono-core.js 脚本之前。`);
     },
     createSignal,
     createEffect,
