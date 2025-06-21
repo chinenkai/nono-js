@@ -245,34 +245,61 @@
         </div>
     </div>
 
-    <!-- ======================================== -->
-    <!-- 10. Pixi.js 集成示例 (新增) -->
-    <!-- ======================================== -->
-    <div class="container">
-        <h3>10. Pixi.js 集成示例</h3>
-        <p>这是一个使用 Nono-JS 声明式语法驱动的 Pixi.js 场景。</p>
+<!-- ======================================== -->
+<!-- 10. Pixi.js 集成示例 (已更新以测试静态/动态属性) -->
+<!-- ======================================== -->
+<div class="container">
+    <h3>10. Pixi.js 集成示例</h3>
+    <p>这是一个使用 Nono-JS 声明式语法驱动的 Pixi.js 场景，混合使用了静态和动态属性。</p>
 
-        <!-- 根 Pixi 应用组件 -->
-        <pixi-app :width="800" :height="400" :backgroundColor="pixiBgColor">
-            <!-- 一个容器，用于整体居中 -->
-            <pixi-container :x="400" :y="200">
-                <!-- 一个会旋转、变色的兔子 -->
-                <!-- 在 <template> 内部 -->
-                <pixi-sprite ref="bunnySprite" :texture="bunnyTextureUrl()" :scale="bunnyScale()" :tint="bunnyColor()" @pointerdown="onBunnyClick" @update="onBunnyUpdate"></pixi-sprite>
+    <!-- 根 Pixi 应用组件 -->
+    <!-- width 和 height 使用静态值，backgroundColor 保持动态绑定 -->
+    <pixi-app width="800" height="400" :backgroundColor="pixiBgColor">
+        <!-- 一个容器，用于整体居中。x 和 y 使用静态值。 -->
+        <pixi-container x="400" y="200">
+            <!-- 
+                一个会旋转、变色的兔子。
+                - texture: 动态绑定
+                - scale: 动态绑定
+                - tint: 动态绑定
+                - anchor: 静态值 (由适配器默认处理，这里显式设置以测试)
+                - 事件: 动态绑定
+             -->
+            <pixi-sprite 
+                ref="bunnySprite" 
+                :texture="bunnyTextureUrl()" 
+                :scale="bunnyScale()" 
+                :tint="bunnyColor()" 
+                anchor="0.5"
+                @pointerdown="onBunnyClick" 
+                @update="onBunnyUpdate">
+            </pixi-sprite>
 
-                <!-- 一段响应式文本 -->
-                <pixi-text :text="pixiMessage()" :style="pixiTextStyle()" :y="120" :anchor="0.5"></pixi-text>
-            </pixi-container>
-        </pixi-app>
+            <!-- 
+                一段响应式文本。
+                - text: 动态绑定
+                - style: 动态绑定
+                - y: 静态值
+                - anchor: 静态值
+            -->
+            <pixi-text 
+                :text="pixiMessage()" 
+                :style="pixiTextStyle()" 
+                y="120" 
+                anchor="0.5">
+            </pixi-text>
+        </pixi-container>
+    </pixi-app>
 
-        <div class="controls">
-            <h4>控制面板</h4>
-            <button @click="changePixiMessage">改变 Pixi 文字</button>
-            <button @click="changeBunnyColor">改变兔子颜色</button>
-            <button @click="changeBunnyScale">改变兔子大小</button>
-            <button @click="changeBgColor">改变背景色</button>
-        </div>
+    <div class="controls">
+        <h4>控制面板</h4>
+        <button @click="changePixiMessage">改变 Pixi 文字</button>
+        <button @click="changeBunnyColor">改变兔子颜色</button>
+        <button @click="changeBunnyScale">改变兔子大小</button>
+        <button @click="changeBgColor">改变背景色</button>
     </div>
+</div>
+
 </template>
 
 <script>

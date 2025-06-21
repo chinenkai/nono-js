@@ -894,36 +894,29 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
         // --- 优先处理已注册的异构渲染器组件 ---
         const rendererConfig = rendererComponents.get(upperTagName);
         if (rendererConfig) {
-            // (重构) 调用新的辅助函数来统一解析 props 和 events
             const { props, events, attributesToRemove } = parseComponentProps(element, scope, directiveHandlers, parentComponentName);
             
-            // (保留) 单独处理 ref 和 n-show，因为它们的逻辑与 props/events 不同
             const refName = element.getAttribute("ref");
             const nShowExpression = element.getAttribute("n-show");
             
-            // (重构) 从元素上移除所有已被处理的属性
             attributesToRemove.forEach((attrName) => element.removeAttribute(attrName));
             if (refName) element.removeAttribute("ref");
             if (nShowExpression) element.removeAttribute("n-show");
 
-            // 创建占位符并替换原始元素
             const placeholder = document.createComment(`renderer-component: ${tagName}`);
-            placeholder.tagName = upperTagName; // 存储标签名供 cleanupAndRemoveNode 使用
+            placeholder.tagName = upperTagName;
             element.parentNode.replaceChild(placeholder, element);
 
-            // (重构) 将解析出的 props 和 events 传递给渲染器组件的 create 方法
-            // 注意：为了与当前适配器兼容，暂时将静态和动态 props 合并。
-            // 理想情况下，适配器应能区分这两者。
-            const combinedProps = { ...props.static, ...props.dynamic };
-            const instance = rendererConfig.create(combinedProps, parentInstance, scope, events, placeholder);
+            // =================================================================
+            // === 核心修正：直接传递完整的、包含 static 和 dynamic 的 props 对象 ===
+            // =================================================================
+            const instance = rendererConfig.create(props, parentInstance, scope, events, placeholder);
             
             if (instance) {
                 placeholder.__rendererInstance = instance;
-                // (保留) 处理 ref
                 if (refName) {
                     scope.refs[refName] = instance;
                 }
-                // (保留) 处理 n-show
                 if (nShowExpression && typeof rendererConfig.setVisibility === 'function') {
                     createEffect(() => {
                         let condition = true;
@@ -939,10 +932,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                 console.error(`核心错误：[${parentComponentName}] 渲染器组件 <${tagName}> 的 create 方法没有返回实例。`);
             }
 
-            // 确定要传递给子节点的 parentInstance
             const childParentInstance = instance && instance.stage ? instance.stage : instance;
 
-            // 递归编译子节点
             Array.from(element.childNodes).forEach((child) => compileNode(child, scope, directiveHandlers, `${parentComponentName} > ${upperTagName}`, currentContextOriginalUrl, childParentInstance));
             return;
         }
@@ -960,19 +951,15 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             const rawComponentPath = srcAttr ? srcAttr : `${tagName}.nue`;
             const { versionedUrl: childVersionedUrl, originalUrl: childOriginalUrl } = getVersionedAndOriginalUrls(rawComponentPath, currentContextOriginalUrl);
 
-            // (重构) 调用新的辅助函数来统一解析 props 和 events
             const { props, events, attributesToRemove } = parseComponentProps(element, scope, directiveHandlers, parentComponentName);
 
-            // (重构) 从元素上移除所有已被处理的属性
             attributesToRemove.forEach((attrName) => element.removeAttribute(attrName));
             if (srcAttr) element.removeAttribute("src");
 
-            // (重构) 将解析出的 props 传递给子组件
-            // 子组件的 props 是静态值和动态函数的混合体，这正是我们期望的。
+            // 对于.nue子组件，我们仍然需要合并 props，因为它们的 <script> 块期望一个扁平的 props 对象。
             const initialProps = { ...props.static, ...props.dynamic };
             const eventHandlers = events;
 
-            // (保留) 插槽处理逻辑不变
             const slotsDataForChild = {};
             const slotContentContainer = document.createDocumentFragment();
             Array.from(element.childNodes).forEach((cn) => slotContentContainer.appendChild(cn));
@@ -1004,7 +991,6 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                 }
             }
 
-            // (保留) 挂载子组件的逻辑不变
             const placeholder = document.createComment(`component-placeholder: ${tagName}`);
             if (!element.parentNode) {
                 console.error(`核心错误：[${parentComponentName}] 子组件 <${tagName}> 在替换为占位符前已无父节点。`);
@@ -1016,9 +1002,7 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             return;
         }
 
-        // --- (保留) 后续指令处理逻辑不变 ---
-        // ... (n-if, n-for, slot, 其他属性指令, 文本插值等) ...
-        // (这部分代码与原始文件相同，此处省略以保持简洁)
+        // ... (后续指令处理逻辑不变) ...
         const nIfAttr = element.getAttribute("n-if");
         if (nIfAttr !== null) {
             directiveHandlers.handleNIf(element, nIfAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl, parentInstance), directiveHandlers, parentComponentName);
@@ -1136,8 +1120,6 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
         }
     }
 }
-
-
 
 
 /**
