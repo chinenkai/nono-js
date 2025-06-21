@@ -7,7 +7,7 @@
     <div class="container">
         <h3>1. 父组件计数器 与 Watch 示例</h3>
         <p>
-            父组件计数值: <strong>{{ count() }}</strong>
+            父组件计数值: <strong>{{ count }}</strong>
         </p>
         <button @click="count(count() + 1)">父组件 加 1</button>
         <button @click="add2ToCount()">父组件 加 2 (方法)</button>
@@ -15,21 +15,21 @@
         <h4>Watch 示例:</h4>
         <p>监听 <code>count</code> 值的变化 (非立即执行):</p>
         <ul id="watch-log-count">
-            <li n-if="!watchLogCount().length"><em>等待 count 变化...</em></li>
-            <li n-for="log in watchLogCount()">{{ log() }}</li>
+            <li n-if="!watchLogCount.length"><em>等待 count 变化...</em></li>
+            <li n-for="log in watchLogCount">{{ log }}</li>
         </ul>
 
         <p style="margin-top: 15px">监听 <code>anotherCount</code> 值的变化 (立即执行):</p>
         <p>
-            AnotherCount 当前值: <strong>{{ anotherCount() }}</strong>
+            AnotherCount 当前值: <strong>{{ anotherCount }}</strong>
         </p>
         <button @click="anotherCount(anotherCount() + 5)">AnotherCount 加 5</button>
         <ul id="watch-log-another-count">
-            <li n-if="!watchLogAnotherCount().length"><em>等待 anotherCount 变化...</em></li>
-            <li n-for="log in watchLogAnotherCount()">{{ log() }}</li>
+            <li n-if="!watchLogAnotherCount.length"><em>等待 anotherCount 变化...</em></li>
+            <li n-for="log in watchLogAnotherCount">{{ log }}</li>
         </ul>
-        <button @click="toggleWatchers" :disabled="!watchersActive()">
-            {{ watchersActive() ? "停止所有 Watcher" : "Watchers 已停止" }}
+        <button @click="toggleWatchers" :disabled="!watchersActive">
+            {{ watchersActive ? "停止所有 Watcher" : "Watchers 已停止" }}
         </button>
     </div>
 
@@ -38,15 +38,15 @@
     <!-- ======================================== -->
     <div class="container">
         <h3>2. 属性绑定 (:attribute) 示例</h3>
-        <p :class="{ highlight: isHighlighted(), 'text-large': true }">这段文字根据 isHighlighted() 状态动态添加 'highlight' 类。 (对象语法)</p>
-        <p :class="isHighlighted() ? 'highlight-alt' : 'normal-text'">这段文字根据 isHighlighted() 状态切换 'highlight-alt' 或 'normal-text' 类。 (三元表达式)</p>
-        <p :style="{ color: textColor(), fontSize: count() + 14 + 'px' }">这段文字的颜色 (textColor) 和字号 (基于 count) 是动态绑定的。</p>
-        <button :disabled="isButtonDisabled()">这个按钮的 disabled 状态由 isButtonDisabled() 控制</button>
+        <p :class="{ highlight: isHighlighted, 'text-large': true }">这段文字根据 isHighlighted 状态动态添加 'highlight' 类。 (对象语法)</p>
+        <p :class="isHighlighted ? 'highlight-alt' : 'normal-text'">这段文字根据 isHighlighted 状态切换 'highlight-alt' 或 'normal-text' 类。 (三元表达式)</p>
+        <p :style="{ color: textColor, fontSize: count + 14 + 'px' }">这段文字的颜色 (textColor) 和字号 (基于 count) 是动态绑定的。</p>
+        <button :disabled="isButtonDisabled">这个按钮的 disabled 状态由 isButtonDisabled 控制</button>
         <div>
-            <img :src="imageUrl()" :alt="imageAltText()" width="100" />
-            <p>图片来源 (imageUrl): {{ imageUrl() }}</p>
+            <img :src="imageUrl" :alt="imageAltText" width="100" />
+            <p>图片来源 (imageUrl): {{ imageUrl }}</p>
         </div>
-        <div :data-count="count()">这个 div 有一个动态的 data-count 属性: {{ count() }}</div>
+        <div :data-count="count">这个 div 有一个动态的 data-count 属性: {{ count }}</div>
         <button @click="toggleHighlight()">切换高亮</button>
         <button @click="changeTextColor()">改变文字颜色</button>
         <button @click="toggleDisable()">切换按钮禁用</button>
@@ -61,14 +61,14 @@
         <div>
             <label for="text-input">文本输入: </label>
             <input type="text" id="text-input" n-model="textInput" />
-            <p>输入的值: {{ textInput() }}</p>
+            <p>输入的值: {{ textInput }}</p>
         </div>
         <div>
             <input type="checkbox" id="checkbox-input" n-model="isChecked" />
-            <label for="checkbox-input">是否选中: {{ isChecked() }}</label>
+            <label for="checkbox-input">是否选中: {{ isChecked }}</label>
         </div>
         <div>
-            <p>单选按钮选择: {{ radioValue() }}</p>
+            <p>单选按钮选择: {{ radioValue }}</p>
             <input type="radio" id="radio-one" value="选项一" n-model="radioValue" />
             <label for="radio-one">选项一</label>
             <br />
@@ -79,7 +79,7 @@
             <label for="textarea-input">文本域:</label><br />
             <textarea id="textarea-input" n-model="textAreaContent" rows="3" cols="30"></textarea>
             <p>文本域内容预览:</p>
-            <pre>{{ textAreaContent() }}</pre>
+            <pre>{{ textAreaContent }}</pre>
         </div>
         <div>
             <label for="select-input">下拉选择:</label>
@@ -89,7 +89,7 @@
                 <option value="B">选项 B</option>
                 <option value="C">选项 C</option>
             </select>
-            <p>选中的值: {{ selectedValue() }}</p>
+            <p>选中的值: {{ selectedValue }}</p>
         </div>
     </div>
 
@@ -98,19 +98,19 @@
     <!-- ======================================== -->
     <div class="container">
         <h3>4. 条件渲染 (n-if) 与 条件显示 (n-show)</h3>
-        <button @click="showElement(!showElement())">切换显示状态 (当前: {{ showElement() }})</button>
+        <button @click="showElement(!showElement())">切换显示状态 (当前: {{ showElement }})</button>
         <h4>n-if 示例</h4>
-        <div n-if="showElement()">
-            <p>这个 div 使用 <strong>n-if="showElement()"</strong> 控制。</p>
+        <div n-if="showElement">
+            <p>这个 div 使用 <strong>n-if="showElement"</strong> 控制。</p>
             <p>当条件为 false 时，它会从 DOM 中移除。</p>
-            <p>内部计数器: {{ count() }}</p>
+            <p>内部计数器: {{ count }}</p>
         </div>
-        <p n-if="!showElement()">n-if 的内容已隐藏 (DOM 中不存在)。</p>
+        <p n-if="!showElement">n-if 的内容已隐藏 (DOM 中不存在)。</p>
         <h4>n-show 示例</h4>
-        <div n-show="showElement()" class="show-box">
-            <p>这个 div 使用 <strong>n-show="showElement()"</strong> 控制。</p>
+        <div n-show="showElement" class="show-box">
+            <p>这个 div 使用 <strong>n-show="showElement"</strong> 控制。</p>
             <p>当条件为 false 时，它会设置 style="display: none;"，但仍在 DOM 中。</p>
-            <p>内部计数器: {{ count() }}</p>
+            <p>内部计数器: {{ count }}</p>
         </div>
         <p>n-show 的元素始终在 DOM 树中，检查元素面板可以看到。</p>
     </div>
@@ -123,15 +123,15 @@
         <button @click="addItem()">添加列表项</button>
         <button @click="shuffleItems()">打乱列表项</button>
         <ul>
-            <li n-for="(item, index) in items()" :key="item().id">
-                索引 {{ index() }}:
-                {{ item().name }}
-                (ID: {{ item().id }})
-                <button @click="removeItem(item().id)">移除</button>
-                <span :style="{ color: item().id % 2 === 0 ? 'blue' : 'green' }"> (样式绑定)</span>
+            <li n-for="(item, index) in items" :key="item.id">
+                索引 {{ index }}:
+                {{ item.name }}
+                (ID: {{ item.id }})
+                <button @click="removeItem(item.id)">移除</button>
+                <span :style="{ color: item.id % 2 === 0 ? 'blue' : 'green' }"> (样式绑定)</span>
             </li>
         </ul>
-        <p n-if="items().length === 0">列表为空。</p>
+        <p n-if="items.length === 0">列表为空。</p>
     </div>
 
     <!-- ======================================== -->
@@ -140,7 +140,7 @@
     <div class="container">
         <h3>6. HTML 内容绑定 (n-html) 示例</h3>
         <p>下面的内容由 n-html 渲染 (注意 XSS 风险):</p>
-        <div class="html-container" n-html="rawHtmlContent()"></div>
+        <div class="html-container" n-html="rawHtmlContent"></div>
         <button @click="changeHtmlContent()">改变 HTML 内容</button>
     </div>
 
@@ -149,21 +149,21 @@
     <!-- ======================================== -->
     <div class="container">
         <h3>7. 子组件示例 (带插槽)</h3>
-        <p>要传递给子组件的消息 (动态 Prop): {{ message() }}</p>
+        <p>要传递给子组件的消息 (动态 Prop): {{ message }}</p>
         <button @click="changeMessage()">改变父组件消息 (会更新子组件)</button>
         <p>下面是子组件的内容:</p>
 
-        <child-component src="./child-component.nue" :message="message()" static-message="这是来自父组件的静态问候" @child-notified="handleChildEvent($event)">
+        <child-component src="./child-component.nue" :message="message" static-message="这是来自父组件的静态问候" @child-notified="handleChildEvent($event)">
             <p>这是父组件提供的<strong>默认插槽</strong>内容。</p>
             <p>
-                父组件计数器值: <strong>{{ count() }}</strong> (来自父作用域)
+                父组件计数器值: <strong>{{ count }}</strong> (来自父作用域)
             </p>
             <button @click="count(count() - 1)">父组件按钮 (在默认插槽中)</button>
             <template slot="header">
                 <div style="background-color: #e6f7ff; padding: 8px; border-radius: 4px">
                     <h4>这是父组件为 <code>header</code> 插槽提供的标题!</h4>
                     <p>
-                        当前文本输入值: <em>{{ textInput() }}</em> (来自父作用域)
+                        当前文本输入值: <em>{{ textInput }}</em> (来自父作用域)
                     </p>
                 </div>
             </template>
@@ -172,7 +172,7 @@
             </template>
         </child-component>
         <p>
-            来自子组件的最新消息: <strong>{{ childNotification() }}</strong>
+            来自子组件的最新消息: <strong>{{ childNotification }}</strong>
         </p>
     </div>
 
@@ -182,15 +182,15 @@
     <div class="container">
         <h3>8. NJS 模块调用示例 (utils.njs)</h3>
         <p>
-            应用名称 (来自 utils.njs -> config.njs): <strong>{{ appNameFromUtils() }}</strong>
+            应用名称 (来自 utils.njs -> config.njs): <strong>{{ appNameFromUtils }}</strong>
         </p>
         <p>
-            格式化日期 (来自 utils.njs): <em>{{ formattedDate() }}</em>
+            格式化日期 (来自 utils.njs): <em>{{ formattedDate }}</em>
         </p>
-        <p>问候语 (来自 utils.njs): {{ greeting() }}</p>
+        <p>问候语 (来自 utils.njs): {{ greeting }}</p>
         <button @click="loadRemoteData">从 utils.njs 加载远程数据</button>
-        <p n-if="remoteData()">远程数据: {{ remoteData()?.data }} (时间戳: {{ remoteData()?.timestamp }})</p>
-        <p n-if="isLoadingData()">正在加载数据...</p>
+        <p n-if="remoteData">远程数据: {{ remoteData?.data }} (时间戳: {{ remoteData?.timestamp }})</p>
+        <p n-if="isLoadingData">正在加载数据...</p>
     </div>
 
     <!-- ======================================== -->
@@ -199,7 +199,7 @@
     <div class="container">
         <h3>9. 路由监测示例 (createUrlWatch)</h3>
         <p>
-            当前侦测到的完整 URL (来自 NueCore 内部 Signal): <code class="route-code">{{ currentFullUrlForDisplay() }}</code>
+            当前侦测到的完整 URL (来自 NueCore 内部 Signal): <code class="route-code">{{ currentFullUrlForDisplay }}</code>
         </p>
         <nav class="route-nav">
             <a href="#/home-demo">访问 Home Demo</a>
@@ -213,17 +213,17 @@
 
         <div class="route-status">
             <h4>Home Demo Status (监听 <code>/#/home-demo$</code>):</h4>
-            <p :class="{ matched: homeDemoStatus().isMatched, unmatched: !homeDemoStatus().isMatched }">
-                {{ homeDemoStatus().message }}
+            <p :class="{ matched: homeDemoStatus.isMatched, unmatched: !homeDemoStatus.isMatched }">
+                {{ homeDemoStatus.message }}
             </p>
         </div>
 
         <div class="route-status">
             <h4>Profile Demo Status (监听 <code>/#/profile-demo/([^/?#]+)</code>):</h4>
-            <p :class="{ matched: profileDemoStatus().isMatched, unmatched: !profileDemoStatus().isMatched }">
-                {{ profileDemoStatus().message }}
-                <span n-if="profileDemoStatus().userId">
-                    (提取的用户 ID: <strong>{{ profileDemoStatus().userId }}</strong
+            <p :class="{ matched: profileDemoStatus.isMatched, unmatched: !profileDemoStatus.isMatched }">
+                {{ profileDemoStatus.message }}
+                <span n-if="profileDemoStatus.userId">
+                    (提取的用户 ID: <strong>{{ profileDemoStatus.userId }}</strong
                     >)</span
                 >
             </p>
@@ -231,33 +231,33 @@
 
         <div class="route-status">
             <h4>Settings Demo Status (监听 <code>/#/settings-demo(\?.*)?$</code>):</h4>
-            <p :class="{ matched: settingsDemoStatus().isMatched, unmatched: !settingsDemoStatus().isMatched }">
-                {{ settingsDemoStatus().message }}
-                <span n-if="settingsDemoStatus().queryParams">
-                    (提取的 Query 参数: <strong>{{ settingsDemoStatus().queryParams }}</strong
+            <p :class="{ matched: settingsDemoStatus.isMatched, unmatched: !settingsDemoStatus.isMatched }">
+                {{ settingsDemoStatus.message }}
+                <span n-if="settingsDemoStatus.queryParams">
+                    (提取的 Query 参数: <strong>{{ settingsDemoStatus.queryParams }}</strong
                     >)</span
                 >
             </p>
         </div>
         <div class="route-status">
             <h4>通用路由信息 (监听所有变化):</h4>
-            <p>{{ generalRouteInfo() }}</p>
+            <p>{{ generalRouteInfo }}</p>
         </div>
     </div>
 
-<!-- ======================================== -->
-<!-- 10. Pixi.js 集成示例 (已更新以测试静态/动态属性) -->
-<!-- ======================================== -->
-<div class="container">
-    <h3>10. Pixi.js 集成示例</h3>
-    <p>这是一个使用 Nono-JS 声明式语法驱动的 Pixi.js 场景，混合使用了静态和动态属性。</p>
+    <!-- ======================================== -->
+    <!-- 10. Pixi.js 集成示例 (已更新以测试静态/动态属性) -->
+    <!-- ======================================== -->
+    <div class="container">
+        <h3>10. Pixi.js 集成示例</h3>
+        <p>这是一个使用 Nono-JS 声明式语法驱动的 Pixi.js 场景，混合使用了静态和动态属性。</p>
 
-    <!-- 根 Pixi 应用组件 -->
-    <!-- width 和 height 使用静态值，backgroundColor 保持动态绑定 -->
-    <pixi-app width="800" height="400" :backgroundColor="pixiBgColor">
-        <!-- 一个容器，用于整体居中。x 和 y 使用静态值。 -->
-        <pixi-container x="400" y="200">
-            <!-- 
+        <!-- 根 Pixi 应用组件 -->
+        <!-- width 和 height 使用静态值，backgroundColor 保持动态绑定 -->
+        <pixi-app width="800" height="400" :backgroundColor="pixiBgColor">
+            <!-- 一个容器，用于整体居中。x 和 y 使用静态值。 -->
+            <pixi-container x="400" y="200">
+                <!-- 
                 一个会旋转、变色的兔子。
                 - texture: 动态绑定
                 - scale: 动态绑定
@@ -265,41 +265,27 @@
                 - anchor: 静态值 (由适配器默认处理，这里显式设置以测试)
                 - 事件: 动态绑定
              -->
-            <pixi-sprite 
-                ref="bunnySprite" 
-                :texture="bunnyTextureUrl()" 
-                :scale="bunnyScale()" 
-                :tint="bunnyColor()" 
-                anchor="0.5"
-                @pointerdown="onBunnyClick" 
-                @update="onBunnyUpdate">
-            </pixi-sprite>
+                <pixi-sprite ref="bunnySprite" :texture="bunnyTextureUrl" :scale="bunnyScale" :tint="bunnyColor" anchor="0.5" @pointerdown="onBunnyClick" @update="onBunnyUpdate"> </pixi-sprite>
 
-            <!-- 
+                <!-- 
                 一段响应式文本。
                 - text: 动态绑定
                 - style: 动态绑定
                 - y: 静态值
                 - anchor: 静态值
             -->
-            <pixi-text 
-                :text="pixiMessage()" 
-                :style="pixiTextStyle()" 
-                y="120" 
-                anchor="0.5">
-            </pixi-text>
-        </pixi-container>
-    </pixi-app>
+                <pixi-text :text="pixiMessage" :style="pixiTextStyle" y="120" anchor="0.5"> </pixi-text>
+            </pixi-container>
+        </pixi-app>
 
-    <div class="controls">
-        <h4>控制面板</h4>
-        <button @click="changePixiMessage">改变 Pixi 文字</button>
-        <button @click="changeBunnyColor">改变兔子颜色</button>
-        <button @click="changeBunnyScale">改变兔子大小</button>
-        <button @click="changeBgColor">改变背景色</button>
+        <div class="controls">
+            <h4>控制面板</h4>
+            <button @click="changePixiMessage">改变 Pixi 文字</button>
+            <button @click="changeBunnyColor">改变兔子颜色</button>
+            <button @click="changeBunnyScale">改变兔子大小</button>
+            <button @click="changeBgColor">改变背景色</button>
+        </div>
     </div>
-</div>
-
 </template>
 
 <script>
@@ -471,7 +457,7 @@ const onBunnyClick = () => {
 };
 
 // 在 <script> 内部，替换原有的 onBunnyUpdate
-const onBunnyUpdate = function(ticker) {
+const onBunnyUpdate = function (ticker) {
     // 使用 function 关键字以保留 this 上下文
     // this 将被框架的事件系统正确地设置为组件的作用域对象
     if (this.refs && this.refs.bunnySprite) {
