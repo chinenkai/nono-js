@@ -11,6 +11,56 @@ const NueCoreConfig = {
 // 值 (Value): 一个配置对象，定义了该组件的创建、销毁、更新等生命周期行为。
 const rendererComponents = new Map();
 
+/**
+ * @class RenderContext
+ * @description 一个可继承的、可扩展的依赖容器，是实现依赖注入的核心。
+ * 它取代了旧的 parentInstance 参数，允许组件声明式地获取其运行所需的任何资源。
+ */
+class RenderContext {
+    /**
+     * @param {object} [initialData={}] - 此上下文级别直接提供的依赖数据。
+     * @param {RenderContext|null} [parent=null] - 父级上下文，用于实现继承式查找。
+     */
+    constructor(initialData = {}, parent = null) {
+        this.data = initialData; // 当前上下文存储的数据
+        this.parent = parent;   // 指向父上下文的引用
+    }
+
+    /**
+     * 从上下文中获取一个依赖。
+     * 它会首先在当前上下文中查找，如果找不到，则会沿着继承链向上查找，直到根上下文。
+     * @param {string} key - 依赖的键名。
+     * @returns {*} 找到的依赖值，如果未找到则返回 undefined。
+     */
+    get(key) {
+        if (this.data.hasOwnProperty(key)) {
+            return this.data[key];
+        }
+        if (this.parent) {
+            return this.parent.get(key);
+        }
+        return undefined;
+    }
+
+    /**
+     * 向当前上下文中提供新的依赖。
+     * 这些依赖可供当前组件的后代组件消费。
+     * @param {object} newData - 一个包含新依赖的键值对对象。
+     */
+    provide(newData) {
+        Object.assign(this.data, newData);
+    }
+
+    /**
+     * 创建一个子上下文。
+     * 子上下文继承自当前上下文，形成一条上下文链。
+     * @returns {RenderContext} 一个新的子上下文实例。
+     */
+    createChildContext() {
+        return new RenderContext({}, this);
+    }
+}
+
 
 /**
  * @const {string} __NUE_CONFUSION_KEY__
@@ -870,17 +920,16 @@ function parseComponentProps(element, scope, directiveHandlers, parentComponentN
     return { props, events, attributesToRemove };
 }
 
-
 /**
  * 编译 DOM 节点，处理指令、插值、子组件和插槽。
  * @param {Node} node - 需要编译的 DOM 节点。
  * @param {object} scope - 当前节点编译时所处的作用域对象。
  * @param {object} directiveHandlers - 包含指令处理逻辑的对象 (如 NueDirectives)。
+ * @param {RenderContext} context - 【已修改】当前的渲染上下文，用于依赖注入。
  * @param {string} [parentComponentName="根组件"] - 父组件的名称，用于日志。
  * @param {string|null} [currentContextOriginalUrl=null] - 当前编译上下文的原始 URL (父组件或NJS的URL)，用于解析子组件相对路径。
- * @param {object|null} [parentInstance=null] - 父级异构渲染器组件的实例 (例如 Phaser.Container)，用于构建非 DOM 树。
  */
-function compileNode(node, scope, directiveHandlers, parentComponentName = "根组件", currentContextOriginalUrl = null, parentInstance = null) {
+function compileNode(node, scope, directiveHandlers, context, parentComponentName = "根组件", currentContextOriginalUrl = null) {
     if (!directiveHandlers || typeof directiveHandlers.evaluateExpression !== "function") {
         console.error(`核心错误：[${parentComponentName}] 指令处理器或 evaluateExpression 未准备好，编译中止。`);
         return;
@@ -903,14 +952,27 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             if (refName) element.removeAttribute("ref");
             if (nShowExpression) element.removeAttribute("n-show");
 
+            // 【错误修正 第一步】在修改 DOM 之前，必须先保存子节点列表的副本。
+            const childNodesToProcess = Array.from(element.childNodes);
+
             const placeholder = document.createComment(`renderer-component: ${tagName}`);
             placeholder.tagName = upperTagName;
-            element.parentNode.replaceChild(placeholder, element);
+            
+            // 【错误修正 第二步】使用 element.parentNode 进行替换，这是最直接和可靠的方式。
+            if (element.parentNode) {
+                element.parentNode.replaceChild(placeholder, element);
+            } else {
+                // 如果一个异构组件在模板中是根元素，它可能没有父节点（因为它在 DocumentFragment 中）。
+                // 这种情况由 mountComponent 处理，这里只打印警告。
+                console.warn(`核心警告：[${parentComponentName}] 渲染器组件 <${tagName}> 在替换为占位符时没有父节点。`);
+            }
 
-            // =================================================================
-            // === 核心修正：直接传递完整的、包含 static 和 dynamic 的 props 对象 ===
-            // =================================================================
-            const instance = rendererConfig.create(props, parentInstance, scope, events, placeholder);
+            // 创建子上下文，并传递给组件的create方法
+            const childContext = context.createChildContext();
+            // 为占位符提供其所在的DOM父节点，这对于<pixi-app>等需要在DOM中插入canvas的组件至关重要
+            childContext.provide({ 'dom:parentElement': placeholder.parentNode });
+
+            const instance = rendererConfig.create(props, childContext, scope, events, placeholder);
             
             if (instance) {
                 placeholder.__rendererInstance = instance;
@@ -932,9 +994,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                 console.error(`核心错误：[${parentComponentName}] 渲染器组件 <${tagName}> 的 create 方法没有返回实例。`);
             }
 
-            const childParentInstance = instance && instance.stage ? instance.stage : instance;
-
-            Array.from(element.childNodes).forEach((child) => compileNode(child, scope, directiveHandlers, `${parentComponentName} > ${upperTagName}`, currentContextOriginalUrl, childParentInstance));
+            // 【错误修正 第三步】遍历之前保存的子节点副本进行递归，而不是遍历一个已从DOM中移除的元素。
+            childNodesToProcess.forEach((child) => compileNode(child, scope, directiveHandlers, childContext, `${parentComponentName} > ${upperTagName}`, currentContextOriginalUrl));
             return;
         }
 
@@ -947,6 +1008,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
 
         // --- 处理.nue子组件 (自定义标签，包含 '-') ---
         if (tagName.includes("-") && !["template", "script", "style", "slot"].includes(tagName)) {
+            // ... 此部分逻辑暂时不变，因为 mountComponent 内部会创建新的根上下文
+            // 在后续的异步重构中，这里也需要调整
             const srcAttr = element.getAttribute("src");
             const rawComponentPath = srcAttr ? srcAttr : `${tagName}.nue`;
             const { versionedUrl: childVersionedUrl, originalUrl: childOriginalUrl } = getVersionedAndOriginalUrls(rawComponentPath, currentContextOriginalUrl);
@@ -956,7 +1019,6 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             attributesToRemove.forEach((attrName) => element.removeAttribute(attrName));
             if (srcAttr) element.removeAttribute("src");
 
-            // 对于.nue子组件，我们仍然需要合并 props，因为它们的 <script> 块期望一个扁平的 props 对象。
             const initialProps = { ...props.static, ...props.dynamic };
             const eventHandlers = events;
 
@@ -1002,15 +1064,15 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             return;
         }
 
-        // ... (后续指令处理逻辑不变) ...
+        // 指令处理函数的回调现在需要传递 context
         const nIfAttr = element.getAttribute("n-if");
         if (nIfAttr !== null) {
-            directiveHandlers.handleNIf(element, nIfAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl, parentInstance), directiveHandlers, parentComponentName);
+            directiveHandlers.handleNIf(element, nIfAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, context, cn, currentContextOriginalUrl), directiveHandlers, parentComponentName);
             return;
         }
         const nForAttr = element.getAttribute("n-for");
         if (nForAttr !== null) {
-            directiveHandlers.handleNFor(element, nForAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl, parentInstance), directiveHandlers, parentComponentName);
+            directiveHandlers.handleNFor(element, nForAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, context, cn, currentContextOriginalUrl), directiveHandlers, parentComponentName);
             return;
         }
 
@@ -1025,7 +1087,9 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                     const contentFragmentForSlot = document.createDocumentFragment();
                     rawNodesToCompile.forEach((rawNode) => contentFragmentForSlot.appendChild(rawNode.cloneNode(true)));
                     Array.from(contentFragmentForSlot.childNodes).forEach((nodeToCompileInSlot) => {
-                        compileNode(nodeToCompileInSlot, slotContentParentScope, directiveHandlers, `${parentComponentName} (slot '${slotName}' content from parent)`, slotContentParentContextUrl, parentInstance);
+                        // 插槽内容编译时，使用其父作用域的上下文
+                        // 注意：这里我们假设插槽内容应该使用父组件的上下文，这是一个重要的设计决策。
+                        compileNode(nodeToCompileInSlot, slotContentParentScope, directiveHandlers, context, `${parentComponentName} (slot '${slotName}' content from parent)`, slotContentParentContextUrl);
                     });
                     parentOfSlotTag.insertBefore(contentFragmentForSlot, element);
                 } else {
@@ -1034,7 +1098,8 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                         fallbackFragment.appendChild(element.firstChild);
                     }
                     Array.from(fallbackFragment.childNodes).forEach((fallbackNode) => {
-                        compileNode(fallbackNode, scope, directiveHandlers, `${parentComponentName} (slot '${slotName}' fallback)`, currentContextOriginalUrl, parentInstance);
+                        // 插槽后备内容使用当前上下文编译
+                        compileNode(fallbackNode, scope, directiveHandlers, context, `${parentComponentName} (slot '${slotName}' fallback)`, currentContextOriginalUrl);
                     });
                     parentOfSlotTag.insertBefore(fallbackFragment, element);
                 }
@@ -1080,7 +1145,12 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
         }
         attributesToRemoveAfterProcessing.forEach((attrName) => element.removeAttribute(attrName));
 
-        Array.from(element.childNodes).forEach((child) => compileNode(child, scope, directiveHandlers, `${parentComponentName} > ${element.tagName.toUpperCase()}`, currentContextOriginalUrl, parentInstance));
+        // 为标准DOM元素的子节点创建并传递新的上下文
+        // 这个新的上下文提供了正确的 dom:parentElement
+        const childDomContext = context.createChildContext();
+        childDomContext.provide({ 'dom:parentElement': element });
+        Array.from(element.childNodes).forEach((child) => compileNode(child, scope, directiveHandlers, childDomContext, `${parentComponentName} > ${element.tagName.toUpperCase()}`, currentContextOriginalUrl));
+
     } else if (node.nodeType === Node.TEXT_NODE) {
         // ... (文本插值逻辑不变) ...
         const textContent = node.textContent || "";
@@ -1201,7 +1271,6 @@ function cleanupAndRemoveNode(node) {
     }
 }
 
-
 /**
  * 挂载组件的核心函数。
  * 负责加载组件文件、解析内容、执行脚本、编译模板并渲染到指定 DOM 目标。
@@ -1309,9 +1378,12 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
         }
         const potentialRootNodeInFragment = fragment.firstChild;
 
-        // B.9: 编译 DOM 片段。
-        // 顶层组件编译时，parentInstance 为 null。
-        Array.from(fragment.childNodes).forEach((node) => compileNode(node, componentScope, window.NueDirectives, componentName, originalAbsoluteUrl, null));
+        // 【已修改】创建根上下文
+        const domParentForContext = isPlaceholder ? targetElement.parentNode : targetElement;
+        const rootContext = new RenderContext({ 'dom:parentElement': domParentForContext });
+
+        // 【已修改】编译 DOM 片段，传递根上下文，并移除 parentInstance 参数
+        Array.from(fragment.childNodes).forEach((node) => compileNode(node, componentScope, window.NueDirectives, rootContext, componentName, originalAbsoluteUrl));
 
         injectStyles(style, originalAbsoluteUrl);
 
@@ -1359,6 +1431,7 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
         _currentEffectCleanupList = previousEffectCleanupList;
     }
 }
+
 
 
 /**
