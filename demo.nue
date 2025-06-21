@@ -245,47 +245,6 @@
         </div>
     </div>
 
-    <!-- ======================================== -->
-    <!-- 10. Pixi.js 集成示例 (已更新以测试静态/动态属性) -->
-    <!-- ======================================== -->
-    <div class="container">
-        <h3>10. Pixi.js 集成示例</h3>
-        <p>这是一个使用 Nono-JS 声明式语法驱动的 Pixi.js 场景，混合使用了静态和动态属性。</p>
-
-        <!-- 根 Pixi 应用组件 -->
-        <!-- width 和 height 使用静态值，backgroundColor 保持动态绑定 -->
-        <pixi-app width="800" height="400" :backgroundColor="pixiBgColor">
-            <!-- 一个容器，用于整体居中。x 和 y 使用静态值。 -->
-            <pixi-container x="400" y="200">
-                <!-- 
-                一个会旋转、变色的兔子。
-                - texture: 动态绑定
-                - scale: 动态绑定
-                - tint: 动态绑定
-                - anchor: 静态值 (由适配器默认处理，这里显式设置以测试)
-                - 事件: 动态绑定
-             -->
-                <pixi-sprite ref="bunnySprite" :texture="bunnyTextureUrl" :scale="bunnyScale" :tint="bunnyColor" anchor="0.5" @pointerdown="onBunnyClick" @update="onBunnyUpdate"> </pixi-sprite>
-
-                <!-- 
-                一段响应式文本。
-                - text: 动态绑定
-                - style: 动态绑定
-                - y: 静态值
-                - anchor: 静态值
-            -->
-                <pixi-text :text="pixiMessage" :style="pixiTextStyle" y="120" anchor="0.5"> </pixi-text>
-            </pixi-container>
-        </pixi-app>
-
-        <div class="controls">
-            <h4>控制面板</h4>
-            <button @click="changePixiMessage">改变 Pixi 文字</button>
-            <button @click="changeBunnyColor">改变兔子颜色</button>
-            <button @click="changeBunnyScale">改变兔子大小</button>
-            <button @click="changeBgColor">改变背景色</button>
-        </div>
-    </div>
 </template>
 
 <script>
@@ -343,26 +302,6 @@ const homeDemoStatus = createSignal({ isMatched: false, message: "等待 /#/home
 const profileDemoStatus = createSignal({ isMatched: false, message: "等待 /#/profile-demo/:id 路径...", userId: null });
 const settingsDemoStatus = createSignal({ isMatched: false, message: "等待 /#/settings-demo?params 路径...", queryParams: null });
 const generalRouteInfo = createSignal("等待路由事件...");
-
-// --- 10. Pixi.js 示例状态 (新增) ---
-const pixiMessage = createSignal("点击这只兔子!");
-const bunnyTextureUrl = createSignal("https://pixijs.com/assets/bunny.png");
-const bunnyScale = createSignal(3);
-const bunnyColor = createSignal(0xffffff); // 初始为白色
-const pixiBgColor = createSignal(0x1099bb); // 初始背景色
-const pixiTextStyle = createSignal({
-    fontFamily: "Arial",
-    fontSize: 36,
-    fill: "white",
-    stroke: "#ff3300",
-    strokeThickness: 4,
-    dropShadow: true,
-    dropShadowColor: "#000000",
-    dropShadowBlur: 4,
-    dropShadowAngle: Math.PI / 6,
-    dropShadowDistance: 6,
-});
-let bunnyRotation = 0;
 
 let stopHomeDemoWatch = null;
 let stopProfileDemoWatch = null;
@@ -448,40 +387,6 @@ const loadRemoteData = async () => {
     } finally {
         isLoadingData(false);
     }
-};
-
-// --- Pixi.js 示例方法 (新增) ---
-const onBunnyClick = () => {
-    pixiMessage("噢! 你点到我了!");
-    setTimeout(() => pixiMessage("再次点击我!"), 2000);
-};
-
-// 在 <script> 内部，替换原有的 onBunnyUpdate
-const onBunnyUpdate = function (ticker) {
-    // 使用 function 关键字以保留 this 上下文
-    // this 将被框架的事件系统正确地设置为组件的作用域对象
-    if (this.refs && this.refs.bunnySprite) {
-        bunnyRotation += 0.01 * ticker.deltaTime;
-        this.refs.bunnySprite.rotation = bunnyRotation;
-    }
-};
-
-const changePixiMessage = () => {
-    const messages = ["Nono ♥ Pixi", "声明式2D渲染", "响应式更新!", "太酷了!"];
-    pixiMessage(messages[Math.floor(Math.random() * messages.length)]);
-};
-
-const changeBunnyColor = () => {
-    // 随机生成一个颜色
-    bunnyColor(Math.random() * 0xffffff);
-};
-
-const changeBunnyScale = () => {
-    bunnyScale(bunnyScale() === 3 ? 4 : 3);
-};
-
-const changeBgColor = () => {
-    pixiBgColor(pixiBgColor() === 0x1099bb ? 0x333333 : 0x1099bb);
 };
 
 // --- 生命周期钩子 (父组件的) ---
@@ -637,19 +542,6 @@ return {
     profileDemoStatus,
     settingsDemoStatus,
     generalRouteInfo,
-    // --- 10. Pixi.js 示例导出 (新增) ---
-    pixiMessage,
-    bunnyTextureUrl,
-    bunnyScale,
-    bunnyColor,
-    pixiBgColor,
-    pixiTextStyle,
-    onBunnyClick,
-    onBunnyUpdate,
-    changePixiMessage,
-    changeBunnyColor,
-    changeBunnyScale,
-    changeBgColor,
     onMount,
     onUnmount,
 };

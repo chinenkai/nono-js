@@ -82,6 +82,8 @@ const propTypeConverters = { String: (val) => String(val), Number: (val) => { co
 // 【核心重构】统一的属性和事件处理
 // ===================================================================
 
+// nono-core.js
+
 /**
  * 【已重构】统一的 Props 和 Events 解析与处理函数。
  * 此函数取代了旧的 processComponentProps 和 parseComponentProps。
@@ -127,16 +129,16 @@ function parseAndProcessProps(element, scope, propSchema = {}, componentName) {
     }
 
     // 步骤 2: 根据 Schema 处理静态属性、创建响应式 Getter
-const finalProps = {};
+    const finalProps = {};
 
-// 首先处理默认值
-for (const propName in propSchema) {
-    const currentSchema = propSchema[propName]; // 【修复】使用一个新变量来存储当前 schema
-    if (!providedPropNames.has(propName) && currentSchema.hasOwnProperty('default')) {
-        const defaultValue = typeof currentSchema.default === 'function' ? currentSchema.default() : currentSchema.default;
-        rawProps.static[propName] = defaultValue;
+    // 首先处理默认值
+    for (const propName in propSchema) {
+        const currentSchema = propSchema[propName]; // 【修复】使用一个新变量来存储当前 schema
+        if (!providedPropNames.has(propName) && currentSchema.hasOwnProperty('default')) {
+            const defaultValue = typeof currentSchema.default === 'function' ? currentSchema.default() : currentSchema.default;
+            rawProps.static[propName] = defaultValue;
+        }
     }
-}
 
     // 处理静态 Props (类型转换)
     for (const propName in rawProps.static) {
@@ -213,6 +215,8 @@ async function executeScript(scriptContent, ast, initialProps = {}, emit = () =>
     } catch (error) { throw error; }
 }
 
+// nono-core.js
+
 /**
  * 【异步重构】编译 DOM 节点，处理指令、插值、子组件和插槽。
  * @param {Node} node - 需要编译的 DOM 节点。
@@ -240,15 +244,16 @@ async function compileNode(node, scope, directiveHandlers, context, parentCompon
 
         if (isNueComponent || rendererConfig) {
             const componentName = rendererConfig ? upperTagName : tagName;
+            // 【优化点】对于异构组件，其 props schema 定义在 rendererConfig 中
             const propSchema = rendererConfig ? rendererConfig.props : {};
             
-            // 【统一调用】
+            // 【统一调用】parseAndProcessProps 返回一个干净的、包含响应式 getter 的 props 对象
             const { props, events, attributesToRemove } = parseAndProcessProps(element, scope, propSchema, componentName);
             
             attributesToRemove.forEach((attrName) => element.removeAttribute(attrName));
             
             if (isNueComponent) {
-                // .nue 组件的逻辑
+                // .nue 组件的逻辑 (此部分保持不变)
                 const srcAttr = element.getAttribute("src");
                 const rawComponentPath = srcAttr ? srcAttr : `${tagName}.nue`;
                 if (srcAttr) element.removeAttribute("src");
@@ -286,7 +291,7 @@ async function compileNode(node, scope, directiveHandlers, context, parentCompon
                 await mountComponent(childVersionedUrl, placeholder, props, events, tagName, slotsDataForChild, childOriginalUrl);
 
             } else {
-                // 异构组件的逻辑
+                // 异构组件的逻辑 (渲染器组件)
                 const refName = element.getAttribute("ref");
                 const nShowExpression = element.getAttribute("n-show");
                 if (refName) element.removeAttribute("ref");
@@ -302,8 +307,14 @@ async function compileNode(node, scope, directiveHandlers, context, parentCompon
                 const childContext = context.createChildContext();
                 childContext.provide({ 'dom:parentElement': placeholder.parentNode });
 
-                // 【注意】异构组件的 create 方法现在接收的是已经处理好的 props
-                const instance = await rendererConfig.create({ static: {}, dynamic: props }, childContext, scope, events, placeholder);
+                // =================================================================
+                // 【核心修改点】
+                // 旧的调用: await rendererConfig.create({ static: {}, dynamic: props }, ...);
+                // 新的调用: 直接传递干净、扁平的 props 对象。
+                // 这使得适配器无需关心 prop 的来源（静态或动态），只需直接使用即可。
+                // 响应性由 props 对象内部的 getter 自动处理。
+                const instance = await rendererConfig.create(props, childContext, scope, events, placeholder);
+                // =================================================================
                 
                 if (instance) {
                     placeholder.__rendererInstance = instance;
@@ -321,6 +332,7 @@ async function compileNode(node, scope, directiveHandlers, context, parentCompon
                     console.error(`核心错误：[${parentComponentName}] 渲染器组件 <${tagName}> 的 create 方法没有返回实例。`);
                 }
 
+                // 异构组件的子节点继续在父组件的作用域下编译
                 const compilePromises = childNodesToProcess.map(child => compileNode(child, scope, directiveHandlers, childContext, `${parentComponentName} > ${upperTagName}`, currentContextOriginalUrl));
                 await Promise.all(compilePromises);
             }
@@ -331,7 +343,7 @@ async function compileNode(node, scope, directiveHandlers, context, parentCompon
         const refName = element.getAttribute("ref");
         if (refName) { scope.refs[refName] = element; element.removeAttribute("ref"); }
 
-        // --- 指令处理 ---
+        // --- 指令处理 (此部分保持不变) ---
         const nIfAttr = element.getAttribute("n-if");
         if (nIfAttr !== null) { directiveHandlers.handleNIf(element, nIfAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, context, cn, currentContextOriginalUrl), directiveHandlers, parentComponentName); return; }
         const nForAttr = element.getAttribute("n-for");
@@ -432,6 +444,7 @@ async function compileNode(node, scope, directiveHandlers, context, parentCompon
         if (segments.length > 0 && node.parentNode) { segments.forEach((segment) => node.parentNode.insertBefore(segment, node)); node.parentNode.removeChild(node); }
     }
 }
+
 
 function injectStyles(css, originalComponentUrl) { if (!css || !css.trim()) return; const styleId = `nono-style-${originalComponentUrl.replace(/[^a-zA-Z0-9_-]/g, "-")}`; if (document.getElementById(styleId)) return; const styleElement = document.createElement("style"); styleElement.id = styleId; styleElement.textContent = css; document.head.appendChild(styleElement); }
 function cleanupAndRemoveNode(node) { if (!node) return; if (node.__rendererInstance) { const upperTagName = node.tagName; const rendererConfig = rendererComponents.get(upperTagName); if (rendererConfig) { try { rendererConfig.destroy(node.__rendererInstance); } catch (error) { console.error(`核心错误：执行渲染器组件 <${upperTagName}> 的 destroy 方法时出错:`, error); } } delete node.__rendererInstance; } if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.COMMENT_NODE) { if (node.nodeType === Node.ELEMENT_NODE && node.hasChildNodes()) { Array.from(node.childNodes).forEach((child) => cleanupAndRemoveNode(child)); } if (componentEffectsRegistry.has(node)) { const effectsToStop = componentEffectsRegistry.get(node); effectsToStop.forEach((stopFn) => { try { stopFn(); } catch (error) { console.error(`核心错误：自动清理 Effect 时出错 (节点: ${node.nodeName}):`, error); } }); componentEffectsRegistry.delete(node); } const cleanupCallback = componentCleanupRegistry.get(node); if (typeof cleanupCallback === "function") { try { cleanupCallback(); } catch (error) { console.error(`核心错误：执行 onUnmount 钩子时出错 (节点: ${node.nodeName}):`, error); } componentCleanupRegistry.delete(node); } } if (node.parentNode) { node.parentNode.removeChild(node); } }
