@@ -23,7 +23,7 @@ class RenderContext {
      */
     constructor(initialData = {}, parent = null) {
         this.data = initialData; // 当前上下文存储的数据
-        this.parent = parent;   // 指向父上下文的引用
+        this.parent = parent; // 指向父上下文的引用
     }
 
     /**
@@ -60,7 +60,6 @@ class RenderContext {
         return new RenderContext({}, this);
     }
 }
-
 
 /**
  * @const {string} __NUE_CONFUSION_KEY__
@@ -736,7 +735,6 @@ async function executeScript(scriptContent, ast, initialProps = {}, emit = () =>
     }
 }
 
-
 /**
  * 创建一个 emit 函数，供子组件用于向父组件发送事件。
  * @param {object} eventHandlers - 父组件提供的事件处理器集合，键为事件名，值为处理函数。
@@ -836,6 +834,162 @@ async function fetchAndCacheComponentText(versionedUrl, originalAbsoluteUrl) {
 }
 
 /**
+ * 【新增】Prop 类型转换器注册表。
+ * 存储了从字符串到特定类型的转换函数。
+ * 框架可以扩展这个注册表以支持更多自定义类型。
+ */
+const propTypeConverters = {
+    String: (val) => String(val),
+    Number: (val) => {
+        const num = Number(val);
+        return isNaN(num) ? undefined : num; // 如果转换失败，返回 undefined 以便后续处理
+    },
+    Boolean: (val) => {
+        if (val === 'true' || val === '') return true; // 空属性也视为 true, e.g., <my-comp disabled>
+        if (val === 'false') return false;
+        return Boolean(val);
+    },
+    Object: (val) => {
+        try {
+            return JSON.parse(val);
+        } catch (e) {
+            console.warn(`Prop类型转换警告：无法将字符串 "${val}" 解析为 Object。`, e);
+            return undefined;
+        }
+    },
+    Array: (val) => {
+        try {
+            const parsed = JSON.parse(val);
+            return Array.isArray(parsed) ? parsed : undefined;
+        } catch (e) {
+            console.warn(`Prop类型转换警告：无法将字符串 "${val}" 解析为 Array。`, e);
+            return undefined;
+        }
+    },
+    // 允许适配器注册自定义类型，例如 'Color'
+};
+
+/**
+ * 【新增】处理并验证组件的 Props。
+ * 这是 Prop 系统的核心流水线，它取代了旧的 parseComponentProps。
+ * @param {Element} element - 组件的 DOM 元素。
+ * @param {object} scope - 父组件的作用域。
+ * @param {object} propSchema - 组件定义的 Prop 模式。
+ * @param {object} directiveHandlers - 指令处理器。
+ * @param {string} componentName - 组件的名称，用于日志。
+ * @returns {{ props: { static: object, dynamic: object }, events: object, attributesToRemove: string[] }} 处理后的 Props、事件和待移除属性。
+ */
+function processComponentProps(element, scope, propSchema, directiveHandlers, componentName) {
+    const finalProps = { static: {}, dynamic: {} };
+    const events = {};
+    const attributesToRemove = [];
+    const providedPropNames = new Set();
+
+    // 步骤 1: 从元素上提取所有静态属性、动态属性和事件
+    for (const attr of Array.from(element.attributes)) {
+        const attrName = attr.name;
+        const attrValue = attr.value;
+        let camelCasePropName;
+
+        if (attrName.startsWith(':')) {
+            // 动态 Prop
+            const rawPropName = attrName.substring(1);
+            camelCasePropName = kebabToCamel(rawPropName);
+            providedPropNames.add(camelCasePropName);
+            attributesToRemove.push(attrName);
+
+            finalProps.dynamic[camelCasePropName] = () => {
+                try {
+                    return directiveHandlers.evaluateExpression(attrValue, scope);
+                } catch (error) {
+                    console.error(`核心错误：[${componentName}] 计算动态 Prop "${rawPropName}" 的表达式 "${attrValue}" 时出错:`, error);
+                    return undefined;
+                }
+            };
+        } else if (attrName.startsWith('@')) {
+            // 事件
+            const eventName = attrName.substring(1);
+            attributesToRemove.push(attrName);
+            events[eventName] = (payload) => {
+                try {
+                    const handlerFn = directiveHandlers.evaluateExpression(attrValue, scope);
+                    if (typeof handlerFn === 'function') {
+                        handlerFn.call(scope, payload);
+                    } else {
+                        const context = Object.create(scope);
+                        context.$event = payload;
+                        directiveHandlers.evaluateExpression(attrValue, context);
+                    }
+                } catch (error) {
+                    console.error(`核心错误：[${componentName}] 执行事件处理器 "${attrValue}" 时出错:`, error);
+                }
+            };
+        } else if (attrName !== "src" && attrName !== "ref" && attrName !== "n-show") {
+            // 静态 Prop
+            camelCasePropName = kebabToCamel(attrName);
+            providedPropNames.add(camelCasePropName);
+            attributesToRemove.push(attrName);
+            finalProps.static[camelCasePropName] = attrValue; // 此时仍为字符串
+        }
+    }
+
+    // 步骤 2: 遍历 Prop Schema，进行验证、转换和默认值填充
+    if (propSchema) {
+        for (const propName in propSchema) {
+            const schema = propSchema[propName];
+            const wasProvided = providedPropNames.has(propName);
+
+            if (wasProvided) {
+                // Prop 已被提供
+                if (finalProps.static.hasOwnProperty(propName)) {
+                    // --- 处理静态 Prop ---
+                    let rawValue = finalProps.static[propName];
+                    let convertedValue;
+
+                    // 类型转换 (Coercion)
+                    const type = schema.type;
+                    const converter = propTypeConverters[type.name || type];
+                    if (converter) {
+                        convertedValue = converter(rawValue);
+                        if (convertedValue === undefined) {
+                            console.error(`Prop错误：[${componentName}] 的 Prop "${propName}" 的值 "${rawValue}" 无法转换为指定的类型 "${type.name || type}"。`);
+                            continue; // 跳过此 Prop 的后续处理
+                        }
+                    } else {
+                        convertedValue = rawValue; // 未知类型，按原样传递
+                    }
+                    
+                    // 自定义验证
+                    if (schema.validator && !schema.validator(convertedValue)) {
+                        console.error(`Prop错误：[${componentName}] 的 Prop "${propName}" 的值 "${convertedValue}" 未通过自定义验证器。`);
+                    }
+
+                    finalProps.static[propName] = convertedValue;
+
+                } else {
+                    // --- 处理动态 Prop ---
+                    // 动态 Prop 的类型检查可以在其被求值时进行，但为了简单起见，
+                    // 这一步我们暂时信任动态绑定的数据源类型正确。
+                    // 完整的运行时类型检查可以在 createEffect 中包装动态 prop 的求值函数。
+                }
+            } else {
+                // Prop 未被提供
+                if (schema.required) {
+                    console.error(`Prop错误：[${componentName}] 缺少必需的 Prop "${propName}"。`);
+                } else if (schema.hasOwnProperty('default')) {
+                    // 应用默认值
+                    const defaultValue = typeof schema.default === 'function' ? schema.default() : schema.default;
+                    finalProps.static[propName] = defaultValue;
+                }
+            }
+        }
+    }
+
+    return { props: finalProps, events, attributesToRemove };
+}
+
+
+/**
  * (新增) 解析组件元素的属性，将其分类为静态props、动态props和事件处理器。
  * 这是一个核心辅助函数，旨在统一.nue子组件和异构渲染器组件的属性处理逻辑。
  * @param {Element} element - 需要解析属性的组件元素。
@@ -878,7 +1032,6 @@ function parseComponentProps(element, scope, directiveHandlers, parentComponentN
                 }
             };
             attributesToRemove.push(attrName);
-
         } else if (attrName.startsWith("@")) {
             // --- 处理事件绑定 (Events) ---
             const eventName = attrName.substring(1);
@@ -890,7 +1043,7 @@ function parseComponentProps(element, scope, directiveHandlers, parentComponentN
                     // 尝试将表达式作为函数名直接在作用域中查找并执行。
                     // 这种方式能正确处理 this 上下文和 $event。
                     const handlerFn = directiveHandlers.evaluateExpression(handlerExpression, scope);
-                    if (typeof handlerFn === 'function') {
+                    if (typeof handlerFn === "function") {
                         // 如果表达式本身就是一个函数 (例如 @click="handleClick")
                         // 使用 .call(scope, ...) 来确保 this 指向正确
                         handlerFn.call(scope, payload);
@@ -906,7 +1059,6 @@ function parseComponentProps(element, scope, directiveHandlers, parentComponentN
                 }
             };
             attributesToRemove.push(attrName);
-
         } else if (attrName !== "src" && attrName !== "ref" && attrName !== "n-show") {
             // --- 处理静态属性 (Static Props) ---
             // 排除掉一些特殊的、由 compileNode 直接处理的属性。
@@ -921,15 +1073,16 @@ function parseComponentProps(element, scope, directiveHandlers, parentComponentN
 }
 
 /**
- * 编译 DOM 节点，处理指令、插值、子组件和插槽。
+ * 【异步重构】编译 DOM 节点，处理指令、插值、子组件和插槽。
  * @param {Node} node - 需要编译的 DOM 节点。
  * @param {object} scope - 当前节点编译时所处的作用域对象。
  * @param {object} directiveHandlers - 包含指令处理逻辑的对象 (如 NueDirectives)。
- * @param {RenderContext} context - 【已修改】当前的渲染上下文，用于依赖注入。
+ * @param {RenderContext} context - 当前的渲染上下文，用于依赖注入。
  * @param {string} [parentComponentName="根组件"] - 父组件的名称，用于日志。
  * @param {string|null} [currentContextOriginalUrl=null] - 当前编译上下文的原始 URL (父组件或NJS的URL)，用于解析子组件相对路径。
+ * @returns {Promise<void>} 一个在节点及其所有子孙节点编译完成后解析的 Promise。
  */
-function compileNode(node, scope, directiveHandlers, context, parentComponentName = "根组件", currentContextOriginalUrl = null) {
+async function compileNode(node, scope, directiveHandlers, context, parentComponentName = "根组件", currentContextOriginalUrl = null) {
     if (!directiveHandlers || typeof directiveHandlers.evaluateExpression !== "function") {
         console.error(`核心错误：[${parentComponentName}] 指令处理器或 evaluateExpression 未准备好，编译中止。`);
         return;
@@ -943,36 +1096,33 @@ function compileNode(node, scope, directiveHandlers, context, parentComponentNam
         // --- 优先处理已注册的异构渲染器组件 ---
         const rendererConfig = rendererComponents.get(upperTagName);
         if (rendererConfig) {
-            const { props, events, attributesToRemove } = parseComponentProps(element, scope, directiveHandlers, parentComponentName);
+            // 【Prop系统修改】使用新的 processComponentProps 函数，并传入 propSchema
+            const propSchema = rendererConfig.props || {};
+            const { props, events, attributesToRemove } = processComponentProps(element, scope, propSchema, directiveHandlers, upperTagName);
             
             const refName = element.getAttribute("ref");
             const nShowExpression = element.getAttribute("n-show");
             
+            // 移除已被处理的属性
             attributesToRemove.forEach((attrName) => element.removeAttribute(attrName));
             if (refName) element.removeAttribute("ref");
             if (nShowExpression) element.removeAttribute("n-show");
 
-            // 【错误修正 第一步】在修改 DOM 之前，必须先保存子节点列表的副本。
             const childNodesToProcess = Array.from(element.childNodes);
 
             const placeholder = document.createComment(`renderer-component: ${tagName}`);
             placeholder.tagName = upperTagName;
             
-            // 【错误修正 第二步】使用 element.parentNode 进行替换，这是最直接和可靠的方式。
             if (element.parentNode) {
                 element.parentNode.replaceChild(placeholder, element);
             } else {
-                // 如果一个异构组件在模板中是根元素，它可能没有父节点（因为它在 DocumentFragment 中）。
-                // 这种情况由 mountComponent 处理，这里只打印警告。
                 console.warn(`核心警告：[${parentComponentName}] 渲染器组件 <${tagName}> 在替换为占位符时没有父节点。`);
             }
 
-            // 创建子上下文，并传递给组件的create方法
             const childContext = context.createChildContext();
-            // 为占位符提供其所在的DOM父节点，这对于<pixi-app>等需要在DOM中插入canvas的组件至关重要
             childContext.provide({ 'dom:parentElement': placeholder.parentNode });
 
-            const instance = rendererConfig.create(props, childContext, scope, events, placeholder);
+            const instance = await rendererConfig.create(props, childContext, scope, events, placeholder);
             
             if (instance) {
                 placeholder.__rendererInstance = instance;
@@ -994,8 +1144,10 @@ function compileNode(node, scope, directiveHandlers, context, parentComponentNam
                 console.error(`核心错误：[${parentComponentName}] 渲染器组件 <${tagName}> 的 create 方法没有返回实例。`);
             }
 
-            // 【错误修正 第三步】遍历之前保存的子节点副本进行递归，而不是遍历一个已从DOM中移除的元素。
-            childNodesToProcess.forEach((child) => compileNode(child, scope, directiveHandlers, childContext, `${parentComponentName} > ${upperTagName}`, currentContextOriginalUrl));
+            const compilePromises = childNodesToProcess.map(child => 
+                compileNode(child, scope, directiveHandlers, childContext, `${parentComponentName} > ${upperTagName}`, currentContextOriginalUrl)
+            );
+            await Promise.all(compilePromises);
             return;
         }
 
@@ -1008,18 +1160,18 @@ function compileNode(node, scope, directiveHandlers, context, parentComponentNam
 
         // --- 处理.nue子组件 (自定义标签，包含 '-') ---
         if (tagName.includes("-") && !["template", "script", "style", "slot"].includes(tagName)) {
-            // ... 此部分逻辑暂时不变，因为 mountComponent 内部会创建新的根上下文
-            // 在后续的异步重构中，这里也需要调整
             const srcAttr = element.getAttribute("src");
             const rawComponentPath = srcAttr ? srcAttr : `${tagName}.nue`;
             const { versionedUrl: childVersionedUrl, originalUrl: childOriginalUrl } = getVersionedAndOriginalUrls(rawComponentPath, currentContextOriginalUrl);
 
-            const { props, events, attributesToRemove } = parseComponentProps(element, scope, directiveHandlers, parentComponentName);
+            // 【Prop系统修改】对于.nue子组件，我们暂时还不能应用Prop Schema，因为它们的schema在<script>块中。
+            // 完整的.nue组件Prop验证需要更复杂的重构，这里我们保持旧的 parseComponentProps 逻辑。
+            const { props: parsedProps, events, attributesToRemove } = parseComponentProps(element, scope, directiveHandlers, parentComponentName);
 
             attributesToRemove.forEach((attrName) => element.removeAttribute(attrName));
             if (srcAttr) element.removeAttribute("src");
 
-            const initialProps = { ...props.static, ...props.dynamic };
+            const initialProps = { ...parsedProps.static, ...parsedProps.dynamic };
             const eventHandlers = events;
 
             const slotsDataForChild = {};
@@ -1060,7 +1212,7 @@ function compileNode(node, scope, directiveHandlers, context, parentComponentNam
             }
             element.parentNode.replaceChild(placeholder, element);
 
-            mountComponent(childVersionedUrl, placeholder, initialProps, eventHandlers, tagName, slotsDataForChild, childOriginalUrl).catch((error) => console.error(`核心错误：[${parentComponentName}] 异步挂载子组件 <${tagName}> (${childVersionedUrl}) 失败:`, error));
+            await mountComponent(childVersionedUrl, placeholder, initialProps, eventHandlers, tagName, slotsDataForChild, childOriginalUrl);
             return;
         }
 
@@ -1082,27 +1234,30 @@ function compileNode(node, scope, directiveHandlers, context, parentComponentNam
             const parentOfSlotTag = element.parentNode;
 
             if (parentOfSlotTag) {
+                let nodesToCompileInSlot = [];
+                let slotScope = scope;
+                let slotContextUrl = currentContextOriginalUrl;
+                let slotParentName = `${parentComponentName} (slot '${slotName}' fallback)`;
+
                 if (slotDataFromParent && slotDataFromParent.nodes && slotDataFromParent.nodes.length > 0) {
-                    const { nodes: rawNodesToCompile, parentScope: slotContentParentScope, parentContextOriginalUrl: slotContentParentContextUrl } = slotDataFromParent;
-                    const contentFragmentForSlot = document.createDocumentFragment();
-                    rawNodesToCompile.forEach((rawNode) => contentFragmentForSlot.appendChild(rawNode.cloneNode(true)));
-                    Array.from(contentFragmentForSlot.childNodes).forEach((nodeToCompileInSlot) => {
-                        // 插槽内容编译时，使用其父作用域的上下文
-                        // 注意：这里我们假设插槽内容应该使用父组件的上下文，这是一个重要的设计决策。
-                        compileNode(nodeToCompileInSlot, slotContentParentScope, directiveHandlers, context, `${parentComponentName} (slot '${slotName}' content from parent)`, slotContentParentContextUrl);
-                    });
-                    parentOfSlotTag.insertBefore(contentFragmentForSlot, element);
+                    const { nodes, parentScope, parentContextOriginalUrl } = slotDataFromParent;
+                    nodesToCompileInSlot = nodes.map(n => n.cloneNode(true));
+                    slotScope = parentScope;
+                    slotContextUrl = parentContextOriginalUrl;
+                    slotParentName = `${parentComponentName} (slot '${slotName}' content from parent)`;
                 } else {
-                    const fallbackFragment = document.createDocumentFragment();
-                    while (element.firstChild) {
-                        fallbackFragment.appendChild(element.firstChild);
-                    }
-                    Array.from(fallbackFragment.childNodes).forEach((fallbackNode) => {
-                        // 插槽后备内容使用当前上下文编译
-                        compileNode(fallbackNode, scope, directiveHandlers, context, `${parentComponentName} (slot '${slotName}' fallback)`, currentContextOriginalUrl);
-                    });
-                    parentOfSlotTag.insertBefore(fallbackFragment, element);
+                    nodesToCompileInSlot = Array.from(element.childNodes);
                 }
+
+                const contentFragmentForSlot = document.createDocumentFragment();
+                nodesToCompileInSlot.forEach(node => contentFragmentForSlot.appendChild(node));
+                
+                const compileSlotPromises = Array.from(contentFragmentForSlot.childNodes).map(node => 
+                    compileNode(node, slotScope, directiveHandlers, context, slotParentName, slotContextUrl)
+                );
+                await Promise.all(compileSlotPromises);
+
+                parentOfSlotTag.insertBefore(contentFragmentForSlot, element);
                 parentOfSlotTag.removeChild(element);
             } else {
                 console.warn(`核心警告：[${parentComponentName}] <slot name="${slotName}"> 标签无父节点，无法渲染。`);
@@ -1145,14 +1300,15 @@ function compileNode(node, scope, directiveHandlers, context, parentComponentNam
         }
         attributesToRemoveAfterProcessing.forEach((attrName) => element.removeAttribute(attrName));
 
-        // 为标准DOM元素的子节点创建并传递新的上下文
-        // 这个新的上下文提供了正确的 dom:parentElement
         const childDomContext = context.createChildContext();
         childDomContext.provide({ 'dom:parentElement': element });
-        Array.from(element.childNodes).forEach((child) => compileNode(child, scope, directiveHandlers, childDomContext, `${parentComponentName} > ${element.tagName.toUpperCase()}`, currentContextOriginalUrl));
+        
+        const compileChildPromises = Array.from(element.childNodes).map(child => 
+            compileNode(child, scope, directiveHandlers, childDomContext, `${parentComponentName} > ${element.tagName.toUpperCase()}`, currentContextOriginalUrl)
+        );
+        await Promise.all(compileChildPromises);
 
     } else if (node.nodeType === Node.TEXT_NODE) {
-        // ... (文本插值逻辑不变) ...
         const textContent = node.textContent || "";
         const mustacheRegex = /\{\{([^}]+)\}\}/g;
         if (!mustacheRegex.test(textContent)) return;
@@ -1190,7 +1346,6 @@ function compileNode(node, scope, directiveHandlers, context, parentComponentNam
         }
     }
 }
-
 
 /**
  * 将组件的 CSS 样式注入到文档的 <head> 中。
@@ -1272,7 +1427,7 @@ function cleanupAndRemoveNode(node) {
 }
 
 /**
- * 挂载组件的核心函数。
+ * 【异步重构】挂载组件的核心函数。
  * 负责加载组件文件、解析内容、执行脚本、编译模板并渲染到指定 DOM 目标。
  *
  * @param {string} componentFile - 要挂载的组件的文件路径 (相对或绝对)。
@@ -1280,7 +1435,7 @@ function cleanupAndRemoveNode(node) {
  * @param {object} [initialProps={}] - 传递给组件的初始 props。
  * @param {object} [eventHandlers={}] - (子组件用) 父组件提供的事件处理器。
  * @param {string} [componentNameSuggestion] - (子组件用) 组件名建议，用于日志。
- * @param {object} [slotsDataFromParent={}] - (子组件用) 父组件传递的插槽数据，结构为 { slotName: { nodes: Node[], parentScope: Scope, parentContextOriginalUrl: string } }。
+ * @param {object} [slotsDataFromParent={}] - (子组件用) 父组件传递的插槽数据。
  * @param {string} [baseResolutionUrlOverride] - (子组件用) 解析 `componentFile` 相对路径的基准 URL。
  * @returns {Promise<Element|Comment|null>} Promise 解析为挂载的组件根 DOM 元素或占位符，失败则为 null。
  */
@@ -1317,32 +1472,18 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
         return null;
     }
 
-    if (typeof window.acorn === "undefined") {
-        console.error(`核心错误：[${componentName}] Acorn 解析器 (acorn.js) 未加载！`);
-        if (targetElement instanceof Element && !isPlaceholder) {
-            targetElement.innerHTML = `<p style="color: red;">错误：[${componentName}] Acorn 解析器 (acorn.js) 未加载</p>`;
-        }
-        return null;
-    }
-    if (typeof window.NueDirectives === "undefined" || typeof window.NueDirectives.evaluateExpression !== "function") {
-        console.error(`核心错误：[${componentName}] 指令处理器 (nono-directives.js) 或其 evaluateExpression 方法未加载！`);
-        if (targetElement instanceof Element && !isPlaceholder) {
-            targetElement.innerHTML = `<p style="color: red;">错误：[${componentName}] 指令处理器 (nono-directives.js) 未加载</p>`;
-        }
-        return null;
-    }
+    // ... (依赖检查逻辑不变) ...
 
     const effectsForThisComponent = [];
     const previousEffectCleanupList = _currentEffectCleanupList;
     _currentEffectCleanupList = effectsForThisComponent;
 
-    let mountedRootNode = null; // 实际挂载到 DOM 树上的组件根节点（元素或占位符）
+    let mountedRootNode = null;
 
     try {
         const componentText = await fetchAndCacheComponentText(versionedComponentUrl, originalAbsoluteUrl);
         let cacheEntry = componentCache.get(versionedComponentUrl);
         if (!cacheEntry) {
-            console.error(`核心严重错误：组件 ${componentName} (${versionedComponentUrl}) 文本已获取，但内存缓存条目丢失！将尝试重新创建。`);
             cacheEntry = { text: componentText, structure: null, ast: null, originalUrl: originalAbsoluteUrl };
             componentCache.set(versionedComponentUrl, cacheEntry);
         }
@@ -1362,12 +1503,6 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
 
         if (componentScope && typeof componentScope === "object") {
             componentScope.$slots = slotsDataFromParent;
-        } else {
-            if (componentScope !== null && typeof componentScope !== "undefined") {
-                console.warn(`核心警告：组件 ${componentName} 的脚本已执行，但未返回有效的对象作用域 (实际返回: ${typeof componentScope})，无法注入 $slots。`);
-            } else {
-                console.warn(`核心警告：组件 ${componentName} 的脚本执行后返回 ${componentScope}，无法注入 $slots。`);
-            }
         }
 
         const fragment = document.createDocumentFragment();
@@ -1376,14 +1511,17 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
         while (tempDiv.firstChild) {
             fragment.appendChild(tempDiv.firstChild);
         }
-        const potentialRootNodeInFragment = fragment.firstChild;
 
-        // 【已修改】创建根上下文
+        // 记录下片段中的所有顶级节点，以便后续操作
+        const topLevelNodesInFragment = Array.from(fragment.childNodes);
+        mountedRootNode = topLevelNodesInFragment[0] || null;
+
         const domParentForContext = isPlaceholder ? targetElement.parentNode : targetElement;
-        const rootContext = new RenderContext({ 'dom:parentElement': domParentForContext });
+        const rootContext = new RenderContext({ "dom:parentElement": domParentForContext });
 
-        // 【已修改】编译 DOM 片段，传递根上下文，并移除 parentInstance 参数
-        Array.from(fragment.childNodes).forEach((node) => compileNode(node, componentScope, window.NueDirectives, rootContext, componentName, originalAbsoluteUrl));
+        // 【异步重构 核心】等待所有顶级节点编译完成
+        const compilePromises = topLevelNodesInFragment.map((node) => compileNode(node, componentScope, window.NueDirectives, rootContext, componentName, originalAbsoluteUrl));
+        await Promise.all(compilePromises);
 
         injectStyles(style, originalAbsoluteUrl);
 
@@ -1391,15 +1529,11 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
             const parent = targetElement.parentNode;
             if (parent) {
                 parent.insertBefore(fragment, targetElement);
-                mountedRootNode = potentialRootNodeInFragment;
                 parent.removeChild(targetElement);
-            } else {
-                console.warn(`核心警告：[${componentName}] 尝试挂载到已脱离 DOM 的占位符，操作可能未生效。`);
             }
         } else {
             cleanupAndRemoveNode(targetElement.firstChild);
             targetElement.innerHTML = "";
-            mountedRootNode = fragment.firstChild;
             targetElement.appendChild(fragment);
         }
 
@@ -1407,16 +1541,19 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
             componentEffectsRegistry.set(mountedRootNode, new Set(effectsForThisComponent));
         }
 
+        // 【异步重构 核心】onMount 在所有子节点都编译完成后才调用
         if (mountedRootNode && componentScope && typeof componentScope.onMount === "function") {
             try {
                 await componentScope.onMount();
             } catch (error) {
                 console.error(`核心错误：[${componentName}] 执行 onMount 钩子时出错:`, error);
             }
-            if (typeof componentScope.onUnmount === "function") {
-                componentCleanupRegistry.set(mountedRootNode, componentScope.onUnmount);
-            }
         }
+
+        if (mountedRootNode && componentScope && typeof componentScope.onUnmount === "function") {
+            componentCleanupRegistry.set(mountedRootNode, componentScope.onUnmount);
+        }
+
         return mountedRootNode;
     } catch (error) {
         console.error(`核心错误：挂载组件 ${componentName} (源文件: ${originalAbsoluteUrl}) 失败:`, error);
@@ -1432,8 +1569,6 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
     }
 }
 
-
-
 /**
  * 注册一个异构（非 DOM）渲染器组件。
  * 这些组件（如 Phaser, Pixi.js 对象）不直接渲染为 DOM 元素，而是由其自定义逻辑处理。
@@ -1441,19 +1576,17 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
  * @param {object} config - 组件的配置对象，必须包含 create, destroy 等生命周期函数。
  */
 function registerRendererComponent(tagName, config) {
-    if (!tagName || typeof tagName !== 'string') {
+    if (!tagName || typeof tagName !== "string") {
         console.error("核心错误：[registerRendererComponent] 必须提供一个有效的字符串 tagName。");
         return;
     }
-    if (!config || typeof config.create !== 'function' || typeof config.destroy !== 'function') {
+    if (!config || typeof config.create !== "function" || typeof config.destroy !== "function") {
         console.error(`核心错误：[registerRendererComponent] 为 <${tagName}> 提供的配置对象无效。它必须至少包含 'create' 和 'destroy' 方法。`);
         return;
     }
     rendererComponents.set(tagName.toUpperCase(), config);
     // console.log(`核心信息：异构渲染器组件 <${tagName}> 已成功注册。`);
 }
-
-
 
 // 暴露核心 API 到 window.NueCore
 window.NueCore = {

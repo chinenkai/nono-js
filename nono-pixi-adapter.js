@@ -14,73 +14,56 @@
     // ==================================
 
     /**
-     * (重构) 将静态和动态属性应用到 Pixi 实例上。
-     * 这个函数现在能处理静态值，并将所有动态属性的更新合并到一个 Effect 中。
+     * 【Prop系统重构】将静态和动态属性应用到 Pixi 实例上。
+     * 此函数现在假设 props 的值已经是正确的类型，由核心库的 processComponentProps 处理。
      * @param {PIXI.DisplayObject} instance - Pixi 实例。
-     * @param {{static: object, dynamic: object}} props - 由核心库 parseComponentProps 解析出的 props 对象。
+     * @param {{static: object, dynamic: object}} props - 经过验证和转换的 props 对象。
      */
     function applyPixiProperties(instance, props) {
         const { static: staticProps, dynamic: dynamicProps } = props;
 
         // --- 1. 应用静态属性 (仅在创建时执行一次) ---
-        // 静态属性直接赋值，无需创建 Effect。
+        // 直接赋值，因为类型已正确。
         for (const propName in staticProps) {
             const value = staticProps[propName];
-            // 对一些特殊属性进行处理
-            if (propName === "scale") {
-                const scaleValue = parseFloat(value);
-                if (!isNaN(scaleValue)) {
-                    instance.scale.set(scaleValue, scaleValue);
-                }
-            } else if (propName === "anchor") {
-                const anchorValue = parseFloat(value);
-                if (!isNaN(anchorValue)) {
-                    instance.anchor?.set(anchorValue, anchorValue);
+            if (propName === "scale" || propName === "anchor") {
+                const target = instance[propName];
+                if (target) {
+                    if (typeof value === "number") {
+                        target.set(value, value);
+                    } else if (typeof value === "object" && value !== null) {
+                        target.set(value.x ?? target.x, value.y ?? target.y);
+                    }
                 }
             } else if (propName === "texture" || propName === "image") {
-                // 静态纹理也通过异步加载设置
-                PIXI.Assets.load(value)
-                    .then((texture) => {
-                        instance.texture = texture;
-                    })
-                    .catch((e) => console.error(`Pixi适配器错误：加载静态纹理 "${value}" 失败。`, e));
-            } else if (propName === "text") {
-                instance.text = value;
-            } else if (propName === "style") {
-                // 静态 style 属性需要是 JSON 字符串
-                try {
-                    instance.style = JSON.parse(value);
-                } catch (e) {
-                    console.warn(`Pixi适配器警告：无法解析静态 style 属性 JSON 字符串: "${value}"`);
+                // 静态纹理仍然需要异步加载
+                if (value) {
+                    PIXI.Assets.load(value)
+                        .then((texture) => {
+                            instance.texture = texture;
+                        })
+                        .catch((e) => console.error(`Pixi适配器错误：加载静态纹理 "${value}" 失败。`, e));
                 }
             } else {
-                // 其他常规属性直接赋值
                 instance[propName] = value;
             }
         }
 
         // --- 2. 应用动态属性 (通过一个合并的 Effect) ---
-        // 将所有动态属性的更新逻辑合并到一个 createEffect 中，以优化性能。
         createEffect(() => {
             for (const propName in dynamicProps) {
                 const signal = dynamicProps[propName];
                 const value = signal(); // 在 Effect 中读取 Signal 值以建立依赖
 
-                if (value === undefined) continue; // 如果 Signal 未定义，则跳过
+                if (value === undefined) continue;
 
-                // 根据属性名应用值
-                if (propName === "scale") {
-                    if (typeof value === "number") {
-                        instance.scale.set(value, value);
-                    } else if (typeof value === "object" && value !== null) {
-                        instance.scale.set(value.x ?? 1, value.y ?? 1);
-                    }
-                } else if (propName === "anchor") {
-                    if (instance.anchor) {
+                if (propName === "scale" || propName === "anchor") {
+                    const target = instance[propName];
+                    if (target) {
                         if (typeof value === "number") {
-                            instance.anchor.set(value, value);
+                            target.set(value, value);
                         } else if (typeof value === "object" && value !== null) {
-                            instance.anchor.set(value.x ?? 0.5, value.y ?? 0.5);
+                            target.set(value.x ?? target.x, value.y ?? target.y);
                         }
                     }
                 } else if (propName === "texture" || propName === "image") {
@@ -91,10 +74,6 @@
                             })
                             .catch((e) => console.error(`Pixi适配器错误：加载动态纹理 "${value}" 失败。`, e));
                     }
-                } else if (propName === "text") {
-                    instance.text = value ?? "";
-                } else if (propName === "style") {
-                    instance.style = value ?? {};
                 } else {
                     // 其他常规属性直接赋值
                     instance[propName] = value;
@@ -199,18 +178,17 @@
     // ==================================
     // --- <pixi-app> 配置 ---
     const pixiAppConfig = {
-        /**
-         * @param {object} props - 解析后的 props 对象。
-         * @param {RenderContext} context - 【已修改】当前的渲染上下文。
-         * @param {object} scope - 组件作用域。
-         * @param {object} eventHandlers - 事件处理器。
-         * @param {Comment} placeholder - DOM 中的占位符注释节点。
-         */
-        create(props, context, scope, eventHandlers, placeholder) {
-            // (新增) 健壮性检查
+        // 【Prop系统新增】定义 Prop Schema
+        props: {
+            width: { type: Number, default: 800 },
+            height: { type: Number, default: 600 },
+            backgroundColor: { type: Number, default: 0x1099bb },
+        },
+        async create(props, context, scope, eventHandlers, placeholder) {
+            // ... create 函数内部逻辑不变，但它现在接收的是处理过的 props
             if (!props || !props.static || !props.dynamic) {
-                console.error("Pixi适配器错误：<pixi-app> 接收到的 props 格式不正确。应为 { static: {}, dynamic: {} }。实际接收到:", props);
-                return null; // 提前返回，防止后续错误
+                console.error("Pixi适配器错误：<pixi-app> 接收到的 props 格式不正确。");
+                return null;
             }
 
             const canvas = document.createElement("canvas");
@@ -224,50 +202,34 @@
 
             const { static: staticProps, dynamic: dynamicProps } = props;
 
-            // 使用静态或默认值进行初始化
             const app = new PIXI.Application();
 
-            // 【错误修正：同步提供依赖】
-            // 必须在异步 init 之前，同步地向上下文中提供子组件所依赖的资源。
-            // PIXI.Application 在实例化后，app.stage 就已经可用了。
+            await app.init({
+                view: canvas,
+                width: staticProps.width, // 直接使用，无需再转换或提供默认值
+                height: staticProps.height,
+                backgroundColor: staticProps.backgroundColor,
+                autoDensity: true,
+                resolution: window.devicePixelRatio || 1,
+            });
+
             context.provide({
                 "pixi:app": app,
-                "pixi:parentContainer": app.stage, // 同步提供 stage 作为父容器
+                "pixi:renderer": app.renderer,
+                "pixi:ticker": app.ticker,
+                "pixi:parentContainer": app.stage,
             });
 
-            // 使用 Promise.resolve() 来处理异步的 init
-            Promise.resolve().then(async () => {
-                await app.init({
-                    view: canvas,
-                    width: parseInt(staticProps.width) || 800,
-                    height: parseInt(staticProps.height) || 600,
-                    backgroundColor: staticProps.backgroundColor ? parseInt(staticProps.backgroundColor, 16) : 0x1099bb, // 确保颜色是数字
-                    autoDensity: true,
-                    resolution: window.devicePixelRatio || 1,
-                });
-
-                // 【错误修正：异步提供其余依赖】
-                // 在 app.init 完成后，renderer 和 ticker 才完全准备好，此时再提供它们。
-                // 虽然当前子组件可能不直接用，但这是更健壮的做法。
-                context.provide({
-                    "pixi:renderer": app.renderer,
-                    "pixi:ticker": app.ticker,
-                });
-            });
-
-            // 监听动态 props 变化来更新 app
             createEffect(() => {
                 if (dynamicProps.backgroundColor) {
                     const color = dynamicProps.backgroundColor();
-                    // 确保 renderer 存在后再操作
                     if (app.renderer && color !== undefined) {
                         app.renderer.background.color = color;
                     }
                 }
                 if (dynamicProps.width || dynamicProps.height) {
-                    const newWidth = dynamicProps.width ? dynamicProps.width() : app.renderer?.width || parseInt(staticProps.width);
-                    const newHeight = dynamicProps.height ? dynamicProps.height() : app.renderer?.height || parseInt(staticProps.height);
-                    // 确保 renderer 存在后再操作
+                    const newWidth = dynamicProps.width ? dynamicProps.width() : app.renderer.width;
+                    const newHeight = dynamicProps.height ? dynamicProps.height() : app.renderer.height;
                     if (app.renderer && (newWidth !== app.renderer.width || newHeight !== app.renderer.height)) {
                         app.renderer.resize(newWidth, newHeight);
                     }
@@ -276,54 +238,70 @@
 
             return app;
         },
+        // ... destroy 和 setVisibility 不变
         destroy(instance) {
-            instance.destroy(true, true); // 销毁 app，包括 canvas
+            instance.destroy(true, true);
         },
         setVisibility(instance, isVisible) {
-            // App 的可见性由其 canvas 元素的 display 属性控制
             instance.view.style.display = isVisible ? "" : "none";
         },
     };
 
     // --- <pixi-container> 配置 ---
     const pixiContainerConfig = {
-        create(props, context, scope, eventHandlers) {
+        // 【Prop系统新增】定义 Prop Schema
+        props: {
+            x: { type: Number, default: 0 },
+            y: { type: Number, default: 0 },
+            rotation: { type: Number, default: 0 },
+            alpha: { type: Number, default: 1 },
+        },
+        async create(props, context, scope, eventHandlers) {
             const instance = new PIXI.Container();
-            // 【已修改】传递 context 给 _initInstance
             this._initInstance(instance, props, context, scope, eventHandlers);
-
-            // 【核心修改】<pixi-container> 消费 'pixi:parentContainer' 后，
-            // 又为自己的子节点提供了新的 'pixi:parentContainer'，即它自身。
             context.provide({
                 "pixi:parentContainer": instance,
             });
-
             return instance;
         },
         ...pixiDisplayObjectConfig,
     };
 
+    // --- <pixi-sprite> 配置 ---
     const pixiSpriteConfig = {
-        create(props, context, scope, eventHandlers) {
+        // 【Prop系统新增】定义 Prop Schema
+        props: {
+            x: { type: Number, default: 0 },
+            y: { type: Number, default: 0 },
+            texture: { type: String, required: true },
+            tint: { type: Number, default: 0xffffff },
+            scale: { type: [Number, Object], default: 1 },
+            anchor: { type: [Number, Object], default: 0.5 },
+            rotation: { type: Number, default: 0 },
+            alpha: { type: Number, default: 1 },
+        },
+        async create(props, context, scope, eventHandlers) {
             const instance = new PIXI.Sprite();
-            // 【已修改】传递 context 给 _initInstance
             this._initInstance(instance, props, context, scope, eventHandlers);
-
-            // 特殊处理 anchor 的默认值，如果用户没有提供静态或动态的 anchor
-            if (!props.static.anchor && !props.dynamic.anchor) {
-                instance.anchor.set(0.5);
-            }
-
             return instance;
         },
         ...pixiDisplayObjectConfig,
     };
 
+    // --- <pixi-text> 配置 ---
     const pixiTextConfig = {
-        create(props, context, scope, eventHandlers) {
-            // 文本和样式将由统一的 applyPixiProperties 处理
+        // 【Prop系统新增】定义 Prop Schema
+        props: {
+            x: { type: Number, default: 0 },
+            y: { type: Number, default: 0 },
+            text: { type: String, default: "" },
+            style: { type: Object, default: () => ({}) }, // 默认值可以是函数，返回新对象以避免引用问题
+            anchor: { type: [Number, Object], default: 0.5 },
+            rotation: { type: Number, default: 0 },
+            alpha: { type: Number, default: 1 },
+        },
+        async create(props, context, scope, eventHandlers) {
             const instance = new PIXI.Text();
-            // 【已修改】传递 context 给 _initInstance
             this._initInstance(instance, props, context, scope, eventHandlers);
             return instance;
         },
