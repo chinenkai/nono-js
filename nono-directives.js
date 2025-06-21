@@ -1,27 +1,57 @@
-
 // ===================================================================
 // 指令系统 (NueDirectives)
 // ===================================================================
+
+// 添加一个缓存来存储已编译的表达式函数
+const expressionCache = new Map();
+
 window.NueDirectives = {
+
+
     /**
-     * 【已重构】核心表达式求值函数。
+     * 【已重构 & 优化】核心表达式求值函数，带编译缓存。
      * @param {string} expression - 要执行的 JS 表达式字符串。
      * @param {object} scope - 表达式执行的作用域。
-     * @param {boolean} [autoUnwrap=true] - 是否自动解包 Signal。为 true 时，访问 Signal 变量会返回其值；为 false 时，返回 Signal 函数本身。
+     * @param {boolean} [autoUnwrap=true] - 是否自动解包 Signal。
      * @returns {*} 表达式的执行结果。
      */
     evaluateExpression(expression, scope, autoUnwrap = true) {
         if (!expression) return undefined;
 
+        // 关键优化：检查缓存中是否已有编译好的函数
+        let compiledFn = expressionCache.get(expression);
+
+        if (!compiledFn) {
+            // 如果缓存中没有，则只编译一次
+            try {
+                // 我们仍然使用 `with`，因为它是在没有AST解析器的情况下，
+                // 实现模板中简洁语法 (如 `count` 而非 `scope.count`) 的唯一方式。
+                // 但现在，这个昂贵的 `new Function` 操作对于每个表达式字符串来说，
+                // 在整个应用的生命周期中只会执行一次！
+                compiledFn = new Function('scope', `with(scope) { return (${expression}) }`);
+                
+                // 将编译好的函数存入缓存
+                expressionCache.set(expression, compiledFn);
+            } catch (error) {
+                console.error(`核心错误：编译表达式 "${expression}" 时出错:`, error);
+                // 缓存一个错误函数，避免重复编译失败的表达式
+                const errorFn = () => {
+                    console.error(`尝试执行一个编译失败的表达式: "${expression}"`);
+                    return undefined;
+                };
+                expressionCache.set(expression, errorFn);
+                return errorFn();
+            }
+        }
+
+        // 准备执行上下文
         let context = scope;
         if (autoUnwrap) {
-            // 创建一个代理，用于在访问属性时自动解包 Signal
+            // Proxy 仍然是实现 Signal 自动解包的最优方式
             context = new Proxy(scope, {
                 get(target, prop, receiver) {
-                    // 必须检查属性是否在目标上，以避免代理不必要的内置属性
                     if (Reflect.has(target, prop)) {
                         const value = Reflect.get(target, prop, receiver);
-                        // 如果值是一个 Signal，则调用它以获取其当前值
                         if (value && value.__is_signal__ === true) {
                             return value();
                         }
@@ -29,22 +59,22 @@ window.NueDirectives = {
                     }
                     return undefined;
                 },
-                // 必须提供 has 陷阱，以确保 `with` 语句能正常工作
                 has(target, prop) {
                     return Reflect.has(target, prop);
                 }
             });
         }
 
+        // 执行（已缓存的）编译后函数
         try {
-            // 使用 `with` 和 `new Function` 来在指定上下文中安全地执行表达式
-            // `with` 语句将 context (代理或原始 scope) 的属性添加到求值时的作用域链中
-            return new Function('scope', `with(scope) { return (${expression}) }`)(context);
+            return compiledFn(context);
         } catch (error) {
+            // 这里的错误是运行时错误，而不是编译错误
             console.error(`核心错误：执行表达式 "${expression}" 时出错:`, error);
             return undefined;
         }
     },
+
 
     handleNIf(element, expression, scope, compileFn, directiveHandlers, parentComponentName) {
         const placeholder = document.createComment(`n-if: ${expression}`);
