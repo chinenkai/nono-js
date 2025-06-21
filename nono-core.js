@@ -5,6 +5,13 @@ const NueCoreConfig = {
     appVersion: null, // 应用版本号，用于缓存控制
 };
 
+// --- 新增：异构（非 DOM）渲染器组件注册表 ---
+// 用于存储通过 NueCore.registerRendererComponent 注册的自定义渲染器组件。
+// 键 (Key): 组件的标签名 (大写形式, e.g., 'PHASER-SPRITE').
+// 值 (Value): 一个配置对象，定义了该组件的创建、销毁、更新等生命周期行为。
+const rendererComponents = new Map();
+
+
 /**
  * @const {string} __NUE_CONFUSION_KEY__
  * 用于文本混淆的密钥。
@@ -635,7 +642,8 @@ async function _loadAndExecuteNjsModule(relativePath, baseOriginalUrl) {
  */
 async function executeScript(scriptContent, ast, initialProps = {}, emit = () => {}, componentOriginalUrl) {
     if (!scriptContent.trim()) {
-        return {};
+        // 如果脚本为空，返回一个包含 refs 的空对象
+        return { refs: {} };
     }
 
     try {
@@ -662,15 +670,22 @@ async function executeScript(scriptContent, ast, initialProps = {}, emit = () =>
         const componentScope = await componentScopePromise;
 
         if (typeof componentScope === "object" && componentScope !== null) {
+            // 新增：确保作用域对象上存在 refs 对象
+            if (!componentScope.refs) {
+                componentScope.refs = {};
+            }
             return componentScope;
         } else {
-            throw err; // 抛出错误以中断流程
+            // 如果脚本没有返回一个对象，我们创建一个并添加 refs
+            console.warn(`核心警告：组件 ${componentOriginalUrl} 的脚本未返回一个对象。将创建一个空作用域。`);
+            return { refs: {} };
         }
     } catch (error) {
         // 捕获来自 new Function 或 await componentScopePromise 的错误
         throw error; // 重新抛出原始错误，让上层处理
     }
 }
+
 
 /**
  * 创建一个 emit 函数，供子组件用于向父组件发送事件。
@@ -777,8 +792,9 @@ async function fetchAndCacheComponentText(versionedUrl, originalAbsoluteUrl) {
  * @param {object} directiveHandlers - 包含指令处理逻辑的对象 (如 NueDirectives)。
  * @param {string} [parentComponentName="根组件"] - 父组件的名称，用于日志。
  * @param {string|null} [currentContextOriginalUrl=null] - 当前编译上下文的原始 URL (父组件或NJS的URL)，用于解析子组件相对路径。
+ * @param {object|null} [parentInstance=null] - 父级异构渲染器组件的实例 (例如 Phaser.Container)，用于构建非 DOM 树。
  */
-function compileNode(node, scope, directiveHandlers, parentComponentName = "根组件", currentContextOriginalUrl = null) {
+function compileNode(node, scope, directiveHandlers, parentComponentName = "根组件", currentContextOriginalUrl = null, parentInstance = null) {
     if (!directiveHandlers || typeof directiveHandlers.evaluateExpression !== "function") {
         console.error(`核心错误：[${parentComponentName}] 指令处理器或 evaluateExpression 未准备好，编译中止。`);
         return;
@@ -787,12 +803,111 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
     if (node.nodeType === Node.ELEMENT_NODE) {
         const element = node;
         const tagName = element.tagName.toLowerCase();
+        const upperTagName = element.tagName.toUpperCase();
 
-        // --- 处理子组件 (自定义标签，包含 '-') ---
+        // --- 优先处理已注册的异构渲染器组件 ---
+        const rendererConfig = rendererComponents.get(upperTagName);
+        if (rendererConfig) {
+            const initialProps = {};
+            const eventHandlers = {};
+            const attributesToRemove = [];
+            const refName = element.getAttribute("ref");
+            const nShowExpression = element.getAttribute("n-show");
+
+            for (const attr of Array.from(element.attributes)) {
+                const attrName = attr.name;
+                const attrValue = attr.value;
+
+                if (attrName === "ref" || attrName === "n-show") {
+                    attributesToRemove.push(attrName);
+                    continue;
+                }
+
+                if (attrName.startsWith(":")) {
+                    const rawPropName = attrName.substring(1);
+                    const camelCasePropName = kebabToCamel(rawPropName);
+                    const expression = attrValue;
+                    const propSignal = createSignal(undefined);
+                    createEffect(() => {
+                        try {
+                            propSignal(directiveHandlers.evaluateExpression(expression, scope));
+                        } catch (error) {
+                            console.error(`核心错误：[${parentComponentName}] 计算渲染器组件 Prop "${rawPropName}" 表达式 "${expression}" 出错:`, error);
+                            propSignal(undefined);
+                        }
+                    });
+                    initialProps[camelCasePropName] = propSignal;
+                    attributesToRemove.push(attrName);
+                } else if (attrName.startsWith("@")) {
+                    const eventName = attrName.substring(1);
+                    const handlerExpression = attrValue;
+                    eventHandlers[eventName] = (payload) => {
+                        try {
+                            const handlerFn = directiveHandlers.evaluateExpression(handlerExpression, scope);
+                            if (typeof handlerFn === 'function') {
+                                handlerFn.call(scope, payload);
+                            } else {
+                                const context = Object.create(scope);
+                                context.$event = payload;
+                                directiveHandlers.evaluateExpression(handlerExpression, context);
+                            }
+                        } catch (error) {
+                            console.error(`核心错误：[${parentComponentName}] 执行渲染器组件事件处理器 "${handlerExpression}" 出错:`, error);
+                        }
+                    };
+                    attributesToRemove.push(attrName);
+                } else {
+                    initialProps[kebabToCamel(attrName)] = attrValue;
+                }
+            }
+            attributesToRemove.forEach((attrName) => element.removeAttribute(attrName));
+
+            const placeholder = document.createComment(`renderer-component: ${tagName}`);
+            placeholder.tagName = upperTagName;
+            element.parentNode.replaceChild(placeholder, element);
+
+            const instance = rendererConfig.create(initialProps, parentInstance, scope, eventHandlers, placeholder);
+            
+            if (instance) {
+                placeholder.__rendererInstance = instance;
+                if (refName) {
+                    scope.refs[refName] = instance;
+                }
+                if (nShowExpression && typeof rendererConfig.setVisibility === 'function') {
+                    createEffect(() => {
+                        let condition = true;
+                        try {
+                            condition = !!directiveHandlers.evaluateExpression(nShowExpression, scope);
+                        } catch (error) { /* 错误已在 evaluateExpression 中打印 */ }
+                        rendererConfig.setVisibility(instance, condition);
+                    });
+                } else if (nShowExpression) {
+                    console.warn(`指令警告：[${parentComponentName}] 渲染器组件 <${tagName}> 使用了 n-show，但其配置未实现 setVisibility 方法。`);
+                }
+            } else {
+                console.error(`核心错误：[${parentComponentName}] 渲染器组件 <${tagName}> 的 create 方法没有返回实例。`);
+            }
+
+            // 关键修复：确定要传递给子节点的 parentInstance
+            // 如果当前实例有 stage (说明是 PIXI.Application)，则传递 stage
+            // 否则传递实例本身 (说明是 PIXI.Container 或其他可作为父级的对象)
+            const childParentInstance = instance && instance.stage ? instance.stage : instance;
+
+            Array.from(element.childNodes).forEach((child) => compileNode(child, scope, directiveHandlers, `${parentComponentName} > ${upperTagName}`, currentContextOriginalUrl, childParentInstance));
+            return;
+        }
+
+        // --- 为普通 DOM 元素处理 ref ---
+        const refName = element.getAttribute("ref");
+        if (refName) {
+            scope.refs[refName] = element;
+            element.removeAttribute("ref");
+        }
+
+        // --- 处理.nue子组件 (自定义标签，包含 '-') ---
         if (tagName.includes("-") && !["template", "script", "style", "slot"].includes(tagName)) {
             const srcAttr = element.getAttribute("src");
             const rawComponentPath = srcAttr ? srcAttr : `${tagName}.nue`;
-            // currentContextOriginalUrl 是父组件的 URL，用于解析子组件的相对路径
             const { versionedUrl: childVersionedUrl, originalUrl: childOriginalUrl } = getVersionedAndOriginalUrls(rawComponentPath, currentContextOriginalUrl);
 
             const initialProps = {};
@@ -809,12 +924,10 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                 }
 
                 if (attrName.startsWith(":")) {
-                    // 动态 prop
                     const rawPropName = attrName.substring(1);
                     const camelCasePropName = kebabToCamel(rawPropName);
                     const expression = attrValue;
                     const propSignal = createSignal(undefined);
-                    // 动态 prop 的求值作用域是父组件的 scope
                     createEffect(() => {
                         try {
                             propSignal(directiveHandlers.evaluateExpression(expression, scope));
@@ -826,17 +939,15 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                     initialProps[camelCasePropName] = propSignal;
                     attributesToRemove.push(attrName);
                 } else if (attrName.startsWith("@")) {
-                    // 事件绑定
                     const eventName = attrName.substring(1);
                     const handlerExpression = attrValue;
-                    // 事件处理器的执行作用域是父组件的 scope
                     eventHandlers[eventName] = (payload) => {
                         try {
-                            const context = Object.create(scope); // 父组件 scope
+                            const context = Object.create(scope);
                             context.$event = payload;
                             const result = directiveHandlers.evaluateExpression(handlerExpression, context);
                             if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(handlerExpression.trim()) && typeof result === "function") {
-                                result.call(scope, payload); // this 指向父组件 scope
+                                result.call(scope, payload);
                             }
                         } catch (error) {
                             console.error(`核心错误：[${parentComponentName}] 执行子组件事件处理器 "${handlerExpression}" 出错:`, error);
@@ -844,46 +955,37 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                     };
                     attributesToRemove.push(attrName);
                 } else {
-                    // 静态 prop
                     initialProps[kebabToCamel(attrName)] = attrValue;
                 }
             }
 
-            // --- 处理插槽内容 ---
-            // slotsDataForChild 将存储每个插槽的原始DOM节点列表、定义它们时的父作用域以及父上下文URL
             const slotsDataForChild = {};
             const slotContentContainer = document.createDocumentFragment();
-            // 将子组件标签内的所有子节点移动到临时容器中，以提取插槽内容
             Array.from(element.childNodes).forEach((cn) => slotContentContainer.appendChild(cn));
 
-            const rawSlotContents = { default: [] }; // 用于临时收集各插槽的原始DOM节点
+            const rawSlotContents = { default: [] };
             Array.from(slotContentContainer.childNodes).forEach((childNode) => {
                 if (childNode.nodeType === Node.ELEMENT_NODE && childNode.tagName.toLowerCase() === "template") {
                     if (childNode.hasAttribute("slot")) {
                         let slotNameAttr = (childNode.getAttribute("slot") || "").trim() || "default";
                         if (!rawSlotContents[slotNameAttr]) rawSlotContents[slotNameAttr] = [];
-                        const templateContent = childNode.content; // <template> 标签的内容在 template.content DocumentFragment 中
-                        // 克隆 <template> 的内容节点，以保留原始结构
+                        const templateContent = childNode.content;
                         if (templateContent) Array.from(templateContent.childNodes).forEach((c) => rawSlotContents[slotNameAttr].push(c.cloneNode(true)));
                     } else {
-                        // 没有 slot 属性的 <template> 也视为默认插槽的一部分
                         const templateContent = childNode.content;
                         if (templateContent) Array.from(templateContent.childNodes).forEach((c) => rawSlotContents.default.push(c.cloneNode(true)));
                     }
                 } else if (!(childNode.nodeType === Node.TEXT_NODE && childNode.nodeValue.trim() === "")) {
-                    // 非空文本节点或非 <template> 元素节点，视为默认插槽内容
-                    rawSlotContents.default.push(childNode.cloneNode(true)); // 克隆节点
+                    rawSlotContents.default.push(childNode.cloneNode(true));
                 }
             });
 
-            // 为每个插槽准备数据：原始节点列表、父作用域和父上下文URL
-            // 这些数据将传递给子组件，在子组件渲染 <slot> 标签时使用
             for (const sName in rawSlotContents) {
                 if (rawSlotContents[sName].length > 0) {
                     slotsDataForChild[sName] = {
-                        nodes: rawSlotContents[sName], // 原始DOM节点数组 (已克隆)
-                        parentScope: scope, // 定义这些插槽内容时的父组件作用域
-                        parentContextOriginalUrl: currentContextOriginalUrl, // 父组件的原始URL，用于解析插槽内容中可能存在的相对路径子组件
+                        nodes: rawSlotContents[sName],
+                        parentScope: scope,
+                        parentContextOriginalUrl: currentContextOriginalUrl,
                     };
                 }
             }
@@ -896,68 +998,52 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             }
             element.parentNode.replaceChild(placeholder, element);
 
-            // 异步挂载子组件，传递 props、事件处理器、组件名建议、插槽数据和子组件的原始URL
             mountComponent(childVersionedUrl, placeholder, initialProps, eventHandlers, tagName, slotsDataForChild, childOriginalUrl).catch((error) => console.error(`核心错误：[${parentComponentName}] 异步挂载子组件 <${tagName}> (${childVersionedUrl}) 失败:`, error));
-            return; // 子组件已处理，不再继续编译此节点
+            return;
         }
 
         // --- 处理内置指令 (n-if, n-for 优先) ---
         const nIfAttr = element.getAttribute("n-if");
         if (nIfAttr !== null) {
-            directiveHandlers.handleNIf(element, nIfAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl), directiveHandlers, parentComponentName);
-            return; // n-if 控制整个元素渲染
+            directiveHandlers.handleNIf(element, nIfAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl, parentInstance), directiveHandlers, parentComponentName);
+            return;
         }
         const nForAttr = element.getAttribute("n-for");
         if (nForAttr !== null) {
-            directiveHandlers.handleNFor(element, nForAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl), directiveHandlers, parentComponentName);
-            return; // n-for 处理元素重复渲染
+            directiveHandlers.handleNFor(element, nForAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl, parentInstance), directiveHandlers, parentComponentName);
+            return;
         }
 
         // --- 处理 <slot> 标签 ---
         if (tagName === "slot") {
             const slotName = element.getAttribute("name") || "default";
-            // scope 是当前组件 (子组件) 的作用域
-            // scope.$slots 存储了从父组件传递过来的插槽数据: { name: { nodes: Node[], parentScope: Scope, parentContextOriginalUrl: string } }
             const slotDataFromParent = scope.$slots && scope.$slots[slotName];
-            const parentOfSlotTag = element.parentNode; // <slot> 标签的父节点
+            const parentOfSlotTag = element.parentNode;
 
             if (parentOfSlotTag) {
                 if (slotDataFromParent && slotDataFromParent.nodes && slotDataFromParent.nodes.length > 0) {
-                    // 如果父组件为此插槽提供了内容
                     const { nodes: rawNodesToCompile, parentScope: slotContentParentScope, parentContextOriginalUrl: slotContentParentContextUrl } = slotDataFromParent;
-
                     const contentFragmentForSlot = document.createDocumentFragment();
-                    // 克隆父组件提供的原始DOM节点到新的 DocumentFragment 中
                     rawNodesToCompile.forEach((rawNode) => contentFragmentForSlot.appendChild(rawNode.cloneNode(true)));
-
-                    // 使用父组件的作用域 (slotContentParentScope) 和父组件的上下文URL (slotContentParentContextUrl)
-                    // 来编译这些克隆后的插槽内容节点。
-                    // 这样，插槽内容中的表达式和事件绑定都将在其定义的父组件作用域中执行。
                     Array.from(contentFragmentForSlot.childNodes).forEach((nodeToCompileInSlot) => {
-                        compileNode(nodeToCompileInSlot, slotContentParentScope, directiveHandlers, `${parentComponentName} (slot '${slotName}' content from parent)`, slotContentParentContextUrl);
+                        compileNode(nodeToCompileInSlot, slotContentParentScope, directiveHandlers, `${parentComponentName} (slot '${slotName}' content from parent)`, slotContentParentContextUrl, parentInstance);
                     });
-                    // 将编译好的插槽内容插入到 <slot> 标签之前
                     parentOfSlotTag.insertBefore(contentFragmentForSlot, element);
                 } else {
-                    // 如果父组件未提供内容，则渲染 <slot> 标签的后备内容
                     const fallbackFragment = document.createDocumentFragment();
                     while (element.firstChild) {
-                        // 移动 <slot> 标签的所有子节点 (即后备内容) 到 fallbackFragment
                         fallbackFragment.appendChild(element.firstChild);
                     }
-                    // 后备内容的编译作用域是当前子组件的 scope，上下文URL也是子组件的
                     Array.from(fallbackFragment.childNodes).forEach((fallbackNode) => {
-                        compileNode(fallbackNode, scope, directiveHandlers, `${parentComponentName} (slot '${slotName}' fallback)`, currentContextOriginalUrl);
+                        compileNode(fallbackNode, scope, directiveHandlers, `${parentComponentName} (slot '${slotName}' fallback)`, currentContextOriginalUrl, parentInstance);
                     });
-                    // 将编译好的后备内容插入到 <slot> 标签之前
                     parentOfSlotTag.insertBefore(fallbackFragment, element);
                 }
-                // 移除 <slot> 标签本身
                 parentOfSlotTag.removeChild(element);
             } else {
                 console.warn(`核心警告：[${parentComponentName}] <slot name="${slotName}"> 标签无父节点，无法渲染。`);
             }
-            return; // <slot> 标签已处理
+            return;
         }
 
         // --- 处理其他属性指令 ---
@@ -966,18 +1052,15 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             const attrName = attr.name;
             const attrValue = attr.value;
             if (attrName.startsWith(":")) {
-                // 动态属性绑定
                 if (directiveHandlers.handleAttributeBinding) directiveHandlers.handleAttributeBinding(element, attrName.substring(1), attrValue, scope, parentComponentName);
                 attributesToRemoveAfterProcessing.push(attrName);
             } else if (attrName.startsWith("@")) {
-                // DOM 事件绑定
                 const eventName = attrName.substring(1);
                 element.addEventListener(eventName, (event) => {
                     try {
-                        const context = Object.create(scope); // 当前作用域
+                        const context = Object.create(scope);
                         context.$event = event;
                         const result = directiveHandlers.evaluateExpression(attrValue, context);
-                        // 如果表达式解析为一个函数名，并且结果确实是函数，则以当前 scope 为 this 调用
                         if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(attrValue.trim()) && typeof result === "function") {
                             result.call(scope, event);
                         }
@@ -999,29 +1082,24 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
         }
         attributesToRemoveAfterProcessing.forEach((attrName) => element.removeAttribute(attrName));
 
-        // 递归编译当前元素的子节点
-        // 子节点的编译上下文URL与当前节点相同
-        Array.from(element.childNodes).forEach((child) => compileNode(child, scope, directiveHandlers, `${parentComponentName} > ${element.tagName.toUpperCase()}`, currentContextOriginalUrl));
+        Array.from(element.childNodes).forEach((child) => compileNode(child, scope, directiveHandlers, `${parentComponentName} > ${element.tagName.toUpperCase()}`, currentContextOriginalUrl, parentInstance));
     } else if (node.nodeType === Node.TEXT_NODE) {
-        // 处理文本节点中的插值 {{ ... }}
         const textContent = node.textContent || "";
         const mustacheRegex = /\{\{([^}]+)\}\}/g;
-        if (!mustacheRegex.test(textContent)) return; // 无插值则不处理
+        if (!mustacheRegex.test(textContent)) return;
 
         const segments = [];
         let lastIndex = 0;
         let match;
-        mustacheRegex.lastIndex = 0; // 重置正则 lastIndex
+        mustacheRegex.lastIndex = 0;
         while ((match = mustacheRegex.exec(textContent)) !== null) {
             if (match.index > lastIndex) {
-                // 表达式前的普通文本
                 segments.push(document.createTextNode(textContent.substring(lastIndex, match.index)));
             }
             const expression = match[1].trim();
-            const placeholderNode = document.createTextNode(""); // 为表达式结果创建占位文本节点
+            const placeholderNode = document.createTextNode("");
             segments.push(placeholderNode);
 
-            // 监听表达式依赖变化并更新占位符，作用域是当前 scope
             createEffect(() => {
                 try {
                     const value = directiveHandlers.evaluateExpression(expression, scope);
@@ -1034,17 +1112,17 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             lastIndex = mustacheRegex.lastIndex;
         }
         if (lastIndex < textContent.length) {
-            // 表达式后的剩余普通文本
             segments.push(document.createTextNode(textContent.substring(lastIndex)));
         }
 
-        // 用新片段替换原始文本节点
         if (segments.length > 0 && node.parentNode) {
             segments.forEach((segment) => node.parentNode.insertBefore(segment, node));
             node.parentNode.removeChild(node);
         }
     }
 }
+
+
 
 /**
  * 将组件的 CSS 样式注入到文档的 <head> 中。
@@ -1069,23 +1147,42 @@ function injectStyles(css, originalComponentUrl) {
 function cleanupAndRemoveNode(node) {
     if (!node) return;
 
-    if (node.nodeType === Node.ELEMENT_NODE) {
-        if (node.hasChildNodes()) {
-            // 递归清理子节点
+    // --- 新增：处理异构渲染器组件的销毁 ---
+    // 检查节点是否为渲染器组件的占位符，并且有关联的实例
+    if (node.__rendererInstance) {
+        // 从占位符上获取之前存储的标签名
+        const upperTagName = node.tagName; // 在 compileNode 中已存储
+        const rendererConfig = rendererComponents.get(upperTagName);
+        if (rendererConfig) {
+            try {
+                // 调用注册的 destroy 方法
+                rendererConfig.destroy(node.__rendererInstance);
+            } catch (error) {
+                console.error(`核心错误：执行渲染器组件 <${upperTagName}> 的 destroy 方法时出错:`, error);
+            }
+        }
+        // 清理附加的属性
+        delete node.__rendererInstance;
+    }
+
+    // --- 统一的后续清理逻辑 ---
+    if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.COMMENT_NODE) {
+        // 对元素节点，递归清理子节点
+        if (node.nodeType === Node.ELEMENT_NODE && node.hasChildNodes()) {
             Array.from(node.childNodes).forEach((child) => cleanupAndRemoveNode(child));
         }
 
-        // 执行与此组件根元素关联的自动注册的 Effect 清理函数
+        // 执行与此组件根元素或占位符关联的自动注册的 Effect 清理函数
         if (componentEffectsRegistry.has(node)) {
             const effectsToStop = componentEffectsRegistry.get(node);
             effectsToStop.forEach((stopFn) => {
                 try {
-                    stopFn(); // 执行每个 Effect 的清理函数
+                    stopFn();
                 } catch (error) {
-                    console.error(`核心错误：自动清理 Effect 时出错 (元素: ${node.tagName || "Node"}):`, error);
+                    console.error(`核心错误：自动清理 Effect 时出错 (节点: ${node.nodeName}):`, error);
                 }
             });
-            componentEffectsRegistry.delete(node); // 清理完成后，从注册表中移除
+            componentEffectsRegistry.delete(node);
         }
 
         // 执行用户定义的卸载回调 (onUnmount)
@@ -1094,16 +1191,18 @@ function cleanupAndRemoveNode(node) {
             try {
                 cleanupCallback();
             } catch (error) {
-                console.error(`核心错误：执行 onUnmount 钩子时出错 (元素: ${node.tagName || "Node"}):`, error);
+                console.error(`核心错误：执行 onUnmount 钩子时出错 (节点: ${node.nodeName}):`, error);
             }
-            componentCleanupRegistry.delete(node); // 移除回调
+            componentCleanupRegistry.delete(node);
         }
     }
+
     // 从 DOM 中移除节点
     if (node.parentNode) {
         node.parentNode.removeChild(node);
     }
 }
+
 
 /**
  * 挂载组件的核心函数。
@@ -1116,12 +1215,10 @@ function cleanupAndRemoveNode(node) {
  * @param {string} [componentNameSuggestion] - (子组件用) 组件名建议，用于日志。
  * @param {object} [slotsDataFromParent={}] - (子组件用) 父组件传递的插槽数据，结构为 { slotName: { nodes: Node[], parentScope: Scope, parentContextOriginalUrl: string } }。
  * @param {string} [baseResolutionUrlOverride] - (子组件用) 解析 `componentFile` 相对路径的基准 URL。
- * @returns {Promise<Element|null>} Promise 解析为挂载的组件根 DOM 元素，失败则为 null。
+ * @returns {Promise<Element|Comment|null>} Promise 解析为挂载的组件根 DOM 元素或占位符，失败则为 null。
  */
 async function mountComponent(componentFile, targetSelectorOrElement, initialProps = {}, eventHandlers = {}, componentNameSuggestion, slotsDataFromParent = {}, baseResolutionUrlOverride) {
     // --- 步骤 A: 解析 URL 和确定组件名 ---
-    // baseResolutionUrlOverride 用于当 mountComponent 被递归调用挂载子组件时，确保子组件的相对路径是基于其父组件的原始URL进行解析的。
-    // 对于根组件挂载，此参数通常为 null 或 undefined，此时 getVersionedAndOriginalUrls 会使用 window.location.href 作为基准。
     const { versionedUrl: versionedComponentUrl, originalUrl: originalAbsoluteUrl } = getVersionedAndOriginalUrls(componentFile, baseResolutionUrlOverride || null);
 
     let componentName = componentNameSuggestion;
@@ -1153,7 +1250,6 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
         return null;
     }
 
-    // 检查依赖是否加载
     if (typeof window.acorn === "undefined") {
         console.error(`核心错误：[${componentName}] Acorn 解析器 (acorn.js) 未加载！`);
         if (targetElement instanceof Element && !isPlaceholder) {
@@ -1169,15 +1265,13 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
         return null;
     }
 
-    // 为当前组件实例准备 Effect 清理列表
     const effectsForThisComponent = [];
     const previousEffectCleanupList = _currentEffectCleanupList;
-    _currentEffectCleanupList = effectsForThisComponent; // 后续 createEffect 将注册到此列表
+    _currentEffectCleanupList = effectsForThisComponent;
 
-    let mountedRootElement = null; // 实际挂载到 DOM 树上的组件根元素
+    let mountedRootNode = null; // 实际挂载到 DOM 树上的组件根节点（元素或占位符）
 
     try {
-        // B.3: 获取组件的文本内容
         const componentText = await fetchAndCacheComponentText(versionedComponentUrl, originalAbsoluteUrl);
         let cacheEntry = componentCache.get(versionedComponentUrl);
         if (!cacheEntry) {
@@ -1186,26 +1280,21 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
             componentCache.set(versionedComponentUrl, cacheEntry);
         }
 
-        // B.4: 解析组件结构
         if (!cacheEntry.structure) {
             cacheEntry.structure = parseComponentStructure(componentText, versionedComponentUrl);
         }
         const { template, script, style } = cacheEntry.structure;
 
-        // B.5: 使用 Acorn 解析 <script> 内容为 AST
         if (script.trim() && !cacheEntry.ast) {
             cacheEntry.ast = parseScriptWithAcorn(script, versionedComponentUrl);
         }
         const ast = cacheEntry.ast;
 
-        // B.6: 执行组件的 <script> 块
         const emit = createEmitFunction(eventHandlers, componentName);
-        // originalAbsoluteUrl 是当前组件的原始URL，用于其内部 importNjs 的路径解析
         const componentScope = await executeScript(script, ast, initialProps, emit, originalAbsoluteUrl);
 
-        // B.7: 将父组件传入的插槽数据 (原始节点和父作用域) 注入子组件作用域的 $slots 属性
         if (componentScope && typeof componentScope === "object") {
-            componentScope.$slots = slotsDataFromParent; // slotsDataFromParent 包含 { name: { nodes, parentScope, parentContextOriginalUrl } }
+            componentScope.$slots = slotsDataFromParent;
         } else {
             if (componentScope !== null && typeof componentScope !== "undefined") {
                 console.warn(`核心警告：组件 ${componentName} 的脚本已执行，但未返回有效的对象作用域 (实际返回: ${typeof componentScope})，无法注入 $slots。`);
@@ -1214,59 +1303,51 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
             }
         }
 
-        // B.8: 根据模板创建 DOM 片段
         const fragment = document.createDocumentFragment();
         const tempDiv = document.createElement("div");
-        tempDiv.innerHTML = template.trim(); // 将模板字符串解析为DOM
+        tempDiv.innerHTML = template.trim();
         while (tempDiv.firstChild) {
-            fragment.appendChild(tempDiv.firstChild); // 将解析后的节点移到 fragment 中
+            fragment.appendChild(tempDiv.firstChild);
         }
-        const potentialRootElementInFragment = fragment.firstElementChild; // 可能是组件的根元素
+        const potentialRootNodeInFragment = fragment.firstChild;
 
         // B.9: 编译 DOM 片段。
-        // 编译时使用的上下文URL是当前组件的 originalAbsoluteUrl。
-        Array.from(fragment.childNodes).forEach((node) => compileNode(node, componentScope, window.NueDirectives, componentName, originalAbsoluteUrl));
+        // 顶层组件编译时，parentInstance 为 null。
+        Array.from(fragment.childNodes).forEach((node) => compileNode(node, componentScope, window.NueDirectives, componentName, originalAbsoluteUrl, null));
 
-        // B.10: 注入样式
         injectStyles(style, originalAbsoluteUrl);
 
-        // B.11: 挂载 DOM 片段
         if (isPlaceholder) {
-            // 替换注释占位符
             const parent = targetElement.parentNode;
             if (parent) {
                 parent.insertBefore(fragment, targetElement);
-                mountedRootElement = potentialRootElementInFragment; // 假设片段的第一个元素是组件根
-                parent.removeChild(targetElement); // 移除占位符
+                mountedRootNode = potentialRootNodeInFragment;
+                parent.removeChild(targetElement);
             } else {
                 console.warn(`核心警告：[${componentName}] 尝试挂载到已脱离 DOM 的占位符，操作可能未生效。`);
             }
         } else {
-            // 替换目标元素内容
-            cleanupAndRemoveNode(targetElement.firstChild); // 清理目标元素内所有现有子节点
-            targetElement.innerHTML = ""; // 确保清空
-            mountedRootElement = fragment.firstElementChild; // 假设片段的第一个元素是组件根
+            cleanupAndRemoveNode(targetElement.firstChild);
+            targetElement.innerHTML = "";
+            mountedRootNode = fragment.firstChild;
             targetElement.appendChild(fragment);
         }
 
-        // 关联收集到的 Effect 清理函数与组件根元素
-        if (mountedRootElement && effectsForThisComponent.length > 0) {
-            componentEffectsRegistry.set(mountedRootElement, new Set(effectsForThisComponent));
+        if (mountedRootNode && effectsForThisComponent.length > 0) {
+            componentEffectsRegistry.set(mountedRootNode, new Set(effectsForThisComponent));
         }
 
-        // B.12: 执行 onMount 生命周期钩子
-        if (mountedRootElement && componentScope && typeof componentScope.onMount === "function") {
+        if (mountedRootNode && componentScope && typeof componentScope.onMount === "function") {
             try {
-                await componentScope.onMount(); // 支持异步 onMount
+                await componentScope.onMount();
             } catch (error) {
                 console.error(`核心错误：[${componentName}] 执行 onMount 钩子时出错:`, error);
             }
-            // 如果 onMount 存在，则检查并注册 onUnmount
             if (typeof componentScope.onUnmount === "function") {
-                componentCleanupRegistry.set(mountedRootElement, componentScope.onUnmount);
+                componentCleanupRegistry.set(mountedRootNode, componentScope.onUnmount);
             }
         }
-        return mountedRootElement;
+        return mountedRootNode;
     } catch (error) {
         console.error(`核心错误：挂载组件 ${componentName} (源文件: ${originalAbsoluteUrl}) 失败:`, error);
         if (targetElement instanceof Element && !isPlaceholder) {
@@ -1277,10 +1358,31 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
         }
         return null;
     } finally {
-        // 恢复外部的 Effect 清理列表上下文
         _currentEffectCleanupList = previousEffectCleanupList;
     }
 }
+
+
+/**
+ * 注册一个异构（非 DOM）渲染器组件。
+ * 这些组件（如 Phaser, Pixi.js 对象）不直接渲染为 DOM 元素，而是由其自定义逻辑处理。
+ * @param {string} tagName - 组件的 HTML 标签名 (例如, 'phaser-sprite')。
+ * @param {object} config - 组件的配置对象，必须包含 create, destroy 等生命周期函数。
+ */
+function registerRendererComponent(tagName, config) {
+    if (!tagName || typeof tagName !== 'string') {
+        console.error("核心错误：[registerRendererComponent] 必须提供一个有效的字符串 tagName。");
+        return;
+    }
+    if (!config || typeof config.create !== 'function' || typeof config.destroy !== 'function') {
+        console.error(`核心错误：[registerRendererComponent] 为 <${tagName}> 提供的配置对象无效。它必须至少包含 'create' 和 'destroy' 方法。`);
+        return;
+    }
+    rendererComponents.set(tagName.toUpperCase(), config);
+    // console.log(`核心信息：异构渲染器组件 <${tagName}> 已成功注册。`);
+}
+
+
 
 // 暴露核心 API 到 window.NueCore
 window.NueCore = {
@@ -1376,4 +1478,5 @@ window.NueCore = {
     navigateTo,
     compileNode, // 暴露编译函数，可能用于高级场景或指令系统扩展
     cleanupAndRemoveNode, // 暴露清理函数
+    registerRendererComponent, // 新增：暴露注册函数
 };
