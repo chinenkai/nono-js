@@ -786,6 +786,92 @@ async function fetchAndCacheComponentText(versionedUrl, originalAbsoluteUrl) {
 }
 
 /**
+ * (新增) 解析组件元素的属性，将其分类为静态props、动态props和事件处理器。
+ * 这是一个核心辅助函数，旨在统一.nue子组件和异构渲染器组件的属性处理逻辑。
+ * @param {Element} element - 需要解析属性的组件元素。
+ * @param {object} scope - 当前的组件作用域，用于求值动态表达式。
+ * @param {object} directiveHandlers - 指令处理器集合，主要为了使用其 evaluateExpression 方法。
+ * @param {string} parentComponentName - 父组件的名称，用于生成更清晰的错误日志。
+ * @returns {{props: {static: object, dynamic: object}, events: object, attributesToRemove: string[]}}
+ *          一个包含解析结果的对象：
+ *          - props.static: 静态属性键值对 (e.g., { myProp: "a static value" })。
+ *          - props.dynamic: 动态属性键值对，值为一个返回响应式值的函数 (e.g., { myProp: () => ... })。
+ *          - events: 事件处理器键值对 (e.g., { click: (payload) => ... })。
+ *          - attributesToRemove: 一个包含所有已被处理的属性名的数组，供调用者从元素上移除。
+ */
+function parseComponentProps(element, scope, directiveHandlers, parentComponentName) {
+    const props = {
+        static: {},
+        dynamic: {},
+    };
+    const events = {};
+    const attributesToRemove = [];
+
+    for (const attr of Array.from(element.attributes)) {
+        const attrName = attr.name;
+        const attrValue = attr.value;
+
+        if (attrName.startsWith(":")) {
+            // --- 处理动态属性 (Dynamic Props) ---
+            const rawPropName = attrName.substring(1);
+            const camelCasePropName = kebabToCamel(rawPropName);
+            const expression = attrValue;
+
+            // 创建一个函数，该函数在被调用时会计算表达式的值。
+            // 这实际上创建了一个“只读 Signal”或“计算属性”，传递给子组件。
+            props.dynamic[camelCasePropName] = () => {
+                try {
+                    return directiveHandlers.evaluateExpression(expression, scope);
+                } catch (error) {
+                    console.error(`核心错误：[${parentComponentName}] 计算动态 Prop "${rawPropName}" 的表达式 "${expression}" 时出错:`, error);
+                    return undefined; // 出错时返回 undefined
+                }
+            };
+            attributesToRemove.push(attrName);
+
+        } else if (attrName.startsWith("@")) {
+            // --- 处理事件绑定 (Events) ---
+            const eventName = attrName.substring(1);
+            const handlerExpression = attrValue;
+
+            // 创建一个标准的事件处理器函数。
+            events[eventName] = (payload) => {
+                try {
+                    // 尝试将表达式作为函数名直接在作用域中查找并执行。
+                    // 这种方式能正确处理 this 上下文和 $event。
+                    const handlerFn = directiveHandlers.evaluateExpression(handlerExpression, scope);
+                    if (typeof handlerFn === 'function') {
+                        // 如果表达式本身就是一个函数 (例如 @click="handleClick")
+                        // 使用 .call(scope, ...) 来确保 this 指向正确
+                        handlerFn.call(scope, payload);
+                    } else {
+                        // 如果是内联表达式 (例如 @click="count(count() + 1)")
+                        // 创建一个包含 $event 的临时上下文来执行它。
+                        const context = Object.create(scope);
+                        context.$event = payload;
+                        directiveHandlers.evaluateExpression(handlerExpression, context);
+                    }
+                } catch (error) {
+                    console.error(`核心错误：[${parentComponentName}] 执行事件处理器 "${handlerExpression}" 时出错:`, error);
+                }
+            };
+            attributesToRemove.push(attrName);
+
+        } else if (attrName !== "src" && attrName !== "ref" && attrName !== "n-show") {
+            // --- 处理静态属性 (Static Props) ---
+            // 排除掉一些特殊的、由 compileNode 直接处理的属性。
+            const camelCasePropName = kebabToCamel(attrName);
+            props.static[camelCasePropName] = attrValue;
+            // 注意：静态属性也应被标记为待移除，因为它们已经被消费，不应保留在DOM上。
+            attributesToRemove.push(attrName);
+        }
+    }
+
+    return { props, events, attributesToRemove };
+}
+
+
+/**
  * 编译 DOM 节点，处理指令、插值、子组件和插槽。
  * @param {Node} node - 需要编译的 DOM 节点。
  * @param {object} scope - 当前节点编译时所处的作用域对象。
@@ -808,71 +894,36 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
         // --- 优先处理已注册的异构渲染器组件 ---
         const rendererConfig = rendererComponents.get(upperTagName);
         if (rendererConfig) {
-            const initialProps = {};
-            const eventHandlers = {};
-            const attributesToRemove = [];
+            // (重构) 调用新的辅助函数来统一解析 props 和 events
+            const { props, events, attributesToRemove } = parseComponentProps(element, scope, directiveHandlers, parentComponentName);
+            
+            // (保留) 单独处理 ref 和 n-show，因为它们的逻辑与 props/events 不同
             const refName = element.getAttribute("ref");
             const nShowExpression = element.getAttribute("n-show");
-
-            for (const attr of Array.from(element.attributes)) {
-                const attrName = attr.name;
-                const attrValue = attr.value;
-
-                if (attrName === "ref" || attrName === "n-show") {
-                    attributesToRemove.push(attrName);
-                    continue;
-                }
-
-                if (attrName.startsWith(":")) {
-                    const rawPropName = attrName.substring(1);
-                    const camelCasePropName = kebabToCamel(rawPropName);
-                    const expression = attrValue;
-                    const propSignal = createSignal(undefined);
-                    createEffect(() => {
-                        try {
-                            propSignal(directiveHandlers.evaluateExpression(expression, scope));
-                        } catch (error) {
-                            console.error(`核心错误：[${parentComponentName}] 计算渲染器组件 Prop "${rawPropName}" 表达式 "${expression}" 出错:`, error);
-                            propSignal(undefined);
-                        }
-                    });
-                    initialProps[camelCasePropName] = propSignal;
-                    attributesToRemove.push(attrName);
-                } else if (attrName.startsWith("@")) {
-                    const eventName = attrName.substring(1);
-                    const handlerExpression = attrValue;
-                    eventHandlers[eventName] = (payload) => {
-                        try {
-                            const handlerFn = directiveHandlers.evaluateExpression(handlerExpression, scope);
-                            if (typeof handlerFn === 'function') {
-                                handlerFn.call(scope, payload);
-                            } else {
-                                const context = Object.create(scope);
-                                context.$event = payload;
-                                directiveHandlers.evaluateExpression(handlerExpression, context);
-                            }
-                        } catch (error) {
-                            console.error(`核心错误：[${parentComponentName}] 执行渲染器组件事件处理器 "${handlerExpression}" 出错:`, error);
-                        }
-                    };
-                    attributesToRemove.push(attrName);
-                } else {
-                    initialProps[kebabToCamel(attrName)] = attrValue;
-                }
-            }
+            
+            // (重构) 从元素上移除所有已被处理的属性
             attributesToRemove.forEach((attrName) => element.removeAttribute(attrName));
+            if (refName) element.removeAttribute("ref");
+            if (nShowExpression) element.removeAttribute("n-show");
 
+            // 创建占位符并替换原始元素
             const placeholder = document.createComment(`renderer-component: ${tagName}`);
-            placeholder.tagName = upperTagName;
+            placeholder.tagName = upperTagName; // 存储标签名供 cleanupAndRemoveNode 使用
             element.parentNode.replaceChild(placeholder, element);
 
-            const instance = rendererConfig.create(initialProps, parentInstance, scope, eventHandlers, placeholder);
+            // (重构) 将解析出的 props 和 events 传递给渲染器组件的 create 方法
+            // 注意：为了与当前适配器兼容，暂时将静态和动态 props 合并。
+            // 理想情况下，适配器应能区分这两者。
+            const combinedProps = { ...props.static, ...props.dynamic };
+            const instance = rendererConfig.create(combinedProps, parentInstance, scope, events, placeholder);
             
             if (instance) {
                 placeholder.__rendererInstance = instance;
+                // (保留) 处理 ref
                 if (refName) {
                     scope.refs[refName] = instance;
                 }
+                // (保留) 处理 n-show
                 if (nShowExpression && typeof rendererConfig.setVisibility === 'function') {
                     createEffect(() => {
                         let condition = true;
@@ -888,11 +939,10 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                 console.error(`核心错误：[${parentComponentName}] 渲染器组件 <${tagName}> 的 create 方法没有返回实例。`);
             }
 
-            // 关键修复：确定要传递给子节点的 parentInstance
-            // 如果当前实例有 stage (说明是 PIXI.Application)，则传递 stage
-            // 否则传递实例本身 (说明是 PIXI.Container 或其他可作为父级的对象)
+            // 确定要传递给子节点的 parentInstance
             const childParentInstance = instance && instance.stage ? instance.stage : instance;
 
+            // 递归编译子节点
             Array.from(element.childNodes).forEach((child) => compileNode(child, scope, directiveHandlers, `${parentComponentName} > ${upperTagName}`, currentContextOriginalUrl, childParentInstance));
             return;
         }
@@ -910,55 +960,19 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             const rawComponentPath = srcAttr ? srcAttr : `${tagName}.nue`;
             const { versionedUrl: childVersionedUrl, originalUrl: childOriginalUrl } = getVersionedAndOriginalUrls(rawComponentPath, currentContextOriginalUrl);
 
-            const initialProps = {};
-            const eventHandlers = {};
-            const attributesToRemove = [];
+            // (重构) 调用新的辅助函数来统一解析 props 和 events
+            const { props, events, attributesToRemove } = parseComponentProps(element, scope, directiveHandlers, parentComponentName);
 
-            for (const attr of Array.from(element.attributes)) {
-                const attrName = attr.name;
-                const attrValue = attr.value;
+            // (重构) 从元素上移除所有已被处理的属性
+            attributesToRemove.forEach((attrName) => element.removeAttribute(attrName));
+            if (srcAttr) element.removeAttribute("src");
 
-                if (attrName === "src") {
-                    attributesToRemove.push(attrName);
-                    continue;
-                }
+            // (重构) 将解析出的 props 传递给子组件
+            // 子组件的 props 是静态值和动态函数的混合体，这正是我们期望的。
+            const initialProps = { ...props.static, ...props.dynamic };
+            const eventHandlers = events;
 
-                if (attrName.startsWith(":")) {
-                    const rawPropName = attrName.substring(1);
-                    const camelCasePropName = kebabToCamel(rawPropName);
-                    const expression = attrValue;
-                    const propSignal = createSignal(undefined);
-                    createEffect(() => {
-                        try {
-                            propSignal(directiveHandlers.evaluateExpression(expression, scope));
-                        } catch (error) {
-                            console.error(`核心错误：[${parentComponentName}] 计算动态 Prop "${rawPropName}" (${attrName}) 表达式 "${expression}" 出错:`, error);
-                            propSignal(undefined);
-                        }
-                    });
-                    initialProps[camelCasePropName] = propSignal;
-                    attributesToRemove.push(attrName);
-                } else if (attrName.startsWith("@")) {
-                    const eventName = attrName.substring(1);
-                    const handlerExpression = attrValue;
-                    eventHandlers[eventName] = (payload) => {
-                        try {
-                            const context = Object.create(scope);
-                            context.$event = payload;
-                            const result = directiveHandlers.evaluateExpression(handlerExpression, context);
-                            if (/^[a-zA-Z_][a-zA-Z0-9_]*$/.test(handlerExpression.trim()) && typeof result === "function") {
-                                result.call(scope, payload);
-                            }
-                        } catch (error) {
-                            console.error(`核心错误：[${parentComponentName}] 执行子组件事件处理器 "${handlerExpression}" 出错:`, error);
-                        }
-                    };
-                    attributesToRemove.push(attrName);
-                } else {
-                    initialProps[kebabToCamel(attrName)] = attrValue;
-                }
-            }
-
+            // (保留) 插槽处理逻辑不变
             const slotsDataForChild = {};
             const slotContentContainer = document.createDocumentFragment();
             Array.from(element.childNodes).forEach((cn) => slotContentContainer.appendChild(cn));
@@ -990,7 +1004,7 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
                 }
             }
 
-            attributesToRemove.forEach((attrName) => element.removeAttribute(attrName));
+            // (保留) 挂载子组件的逻辑不变
             const placeholder = document.createComment(`component-placeholder: ${tagName}`);
             if (!element.parentNode) {
                 console.error(`核心错误：[${parentComponentName}] 子组件 <${tagName}> 在替换为占位符前已无父节点。`);
@@ -1002,7 +1016,9 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             return;
         }
 
-        // --- 处理内置指令 (n-if, n-for 优先) ---
+        // --- (保留) 后续指令处理逻辑不变 ---
+        // ... (n-if, n-for, slot, 其他属性指令, 文本插值等) ...
+        // (这部分代码与原始文件相同，此处省略以保持简洁)
         const nIfAttr = element.getAttribute("n-if");
         if (nIfAttr !== null) {
             directiveHandlers.handleNIf(element, nIfAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl, parentInstance), directiveHandlers, parentComponentName);
@@ -1014,7 +1030,6 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             return;
         }
 
-        // --- 处理 <slot> 标签 ---
         if (tagName === "slot") {
             const slotName = element.getAttribute("name") || "default";
             const slotDataFromParent = scope.$slots && scope.$slots[slotName];
@@ -1046,7 +1061,6 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
             return;
         }
 
-        // --- 处理其他属性指令 ---
         const attributesToRemoveAfterProcessing = [];
         for (const attr of Array.from(element.attributes)) {
             const attrName = attr.name;
@@ -1084,6 +1098,7 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
 
         Array.from(element.childNodes).forEach((child) => compileNode(child, scope, directiveHandlers, `${parentComponentName} > ${element.tagName.toUpperCase()}`, currentContextOriginalUrl, parentInstance));
     } else if (node.nodeType === Node.TEXT_NODE) {
+        // ... (文本插值逻辑不变) ...
         const textContent = node.textContent || "";
         const mustacheRegex = /\{\{([^}]+)\}\}/g;
         if (!mustacheRegex.test(textContent)) return;
@@ -1121,6 +1136,7 @@ function compileNode(node, scope, directiveHandlers, parentComponentName = "根�
         }
     }
 }
+
 
 
 
