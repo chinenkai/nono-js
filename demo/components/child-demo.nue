@@ -1,0 +1,17 @@
+<template>
+    <div class="child-demo-container">in child demo and {{ props.text }}</div>
+</template>
+
+<script>
+const onMount = () => {};
+
+const onUnmount = () => {};
+
+return { props, onMount, onUnmount };
+</script>
+
+<style>
+.child-demo-container {
+    font-size: 20px;
+}
+</style>

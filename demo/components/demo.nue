@@ -1,0 +1,34 @@
+<template>
+    <div class="demo-container">{{ text }}</div>
+    <child-demo src="./child-demo.nue" :text="commonText"></child-demo>
+</template>
+
+<script>
+const { commonText } = await importNjs("../utils/common.njs");
+
+const text = createSignal("hell demo!");
+
+const stopWatching = createWatch(text, (newValue, oldValue) => {
+    console.log(`text 从 ${oldValue} 变成了 ${newValue}`);
+});
+
+const onMount = () => {
+    timerId = setInterval(() => console.log("时间流逝..." + commonText), 1000);
+};
+
+const onUnmount = () => {
+    console.log("组件即将卸载");
+    // 清理定时器
+    clearInterval(timerId);
+    // 停止侦听
+    stopWatching();
+};
+
+return { text, commonText, onMount, onUnmount };
+</script>
+
+<style>
+.demo-container {
+    font-size: 40px;
+}
+</style>
