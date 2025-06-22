@@ -364,12 +364,14 @@ async function _loadAndExecuteNjsModule(relativePath, baseOriginalUrl) {
 function kebabToCamel(kebabCase) {
     return kebabCase.replace(/-([a-z])/g, (match, letter) => letter.toUpperCase());
 }
+// [REPLACE] 步骤 3.1: 用这个版本替换旧的 fetchAndCacheComponentText
 async function fetchAndCacheComponentText(versionedUrl, originalAbsoluteUrl) {
     if (window.__NUE_PRELOADED_DATA__ && typeof window.__NUE_PRELOADED_DATA__ === "object" && window.__NUE_PRELOADED_DATA__.hasOwnProperty(originalAbsoluteUrl)) {
         const confusedTextFromBundle = window.__NUE_PRELOADED_DATA__[originalAbsoluteUrl];
         const preloadedText = nueSimpleTransform(confusedTextFromBundle, __NUE_CONFUSION_KEY__);
         if (!componentCache.has(versionedUrl)) {
-            componentCache.set(versionedUrl, { text: preloadedText, structure: null, originalUrl: originalAbsoluteUrl });
+            // [MODIFIED] 增加 templateElement: null 字段
+            componentCache.set(versionedUrl, { text: preloadedText, structure: null, templateElement: null, originalUrl: originalAbsoluteUrl });
         } else {
             const cachedEntry = componentCache.get(versionedUrl);
             cachedEntry.text = preloadedText;
@@ -392,7 +394,8 @@ async function fetchAndCacheComponentText(versionedUrl, originalAbsoluteUrl) {
             return response.text();
         })
         .then((text) => {
-            componentCache.set(versionedUrl, { text, structure: null, originalUrl: originalAbsoluteUrl });
+            // [MODIFIED] 增加 templateElement: null 字段
+            componentCache.set(versionedUrl, { text, structure: null, templateElement: null, originalUrl: originalAbsoluteUrl });
             _pendingRequests.delete(versionedUrl);
             return text;
         })
@@ -404,6 +407,7 @@ async function fetchAndCacheComponentText(versionedUrl, originalAbsoluteUrl) {
     _pendingRequests.set(versionedUrl, fetchPromise);
     return fetchPromise;
 }
+
 const propTypeConverters = {
     String: (val) => String(val),
     Number: (val) => {
@@ -914,6 +918,7 @@ function cleanupAndRemoveNode(node) {
     }
 }
 
+// [REPLACE] 步骤 3.2: 用这个实现了模板克隆的版本替换旧的 mountComponent
 async function mountComponent(componentFile, targetSelectorOrElement, initialProps = {}, eventHandlers = {}, componentNameSuggestion, slotsDataFromParent = {}, baseResolutionUrlOverride) {
     const { versionedUrl: versionedComponentUrl, originalUrl: originalAbsoluteUrl } = getVersionedAndOriginalUrls(componentFile, baseResolutionUrlOverride || null);
     let componentName = componentNameSuggestion;
@@ -949,7 +954,8 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
         const componentText = await fetchAndCacheComponentText(versionedComponentUrl, originalAbsoluteUrl);
         let cacheEntry = componentCache.get(versionedComponentUrl);
         if (!cacheEntry) {
-            cacheEntry = { text: componentText, structure: null, originalUrl: originalAbsoluteUrl };
+            // 这一步在 fetchAndCacheComponentText 中已完成，作为安全保障
+            cacheEntry = { text: componentText, structure: null, templateElement: null, originalUrl: originalAbsoluteUrl };
             componentCache.set(versionedComponentUrl, cacheEntry);
         }
         if (!cacheEntry.structure) {
@@ -958,19 +964,26 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
         const { template, script, style } = cacheEntry.structure;
 
         const emit = createEmitFunction(eventHandlers, componentName);
-
-        // 【最终修复】将包装后的 reactiveProps 传递给子组件的 script
         const componentScope = await executeScript(script, initialProps, emit, originalAbsoluteUrl);
 
         if (componentScope && typeof componentScope === "object") {
             componentScope.$slots = slotsDataFromParent;
         }
-        const fragment = document.createDocumentFragment();
-        const tempDiv = document.createElement("div");
-        tempDiv.innerHTML = template.trim();
-        while (tempDiv.firstChild) {
-            fragment.appendChild(tempDiv.firstChild);
+
+        // [MODIFIED] 核心模板克隆逻辑
+        let fragment;
+        if (cacheEntry.templateElement) {
+            // 如果模板已编译，直接克隆，速度极快
+            fragment = cacheEntry.templateElement.content.cloneNode(true);
+        } else {
+            // 首次，解析并缓存
+            const templateEl = document.createElement('template');
+            templateEl.innerHTML = template.trim();
+            cacheEntry.templateElement = templateEl; // 缓存起来
+            fragment = templateEl.content.cloneNode(true);
         }
+        // [MODIFIED] 不再需要 tempDiv 和 innerHTML
+        
         const topLevelNodesInFragment = Array.from(fragment.childNodes);
         mountedRootNode = topLevelNodesInFragment[0] || null;
         const domParentForContext = isPlaceholder ? targetElement.parentNode : targetElement;
@@ -1016,6 +1029,7 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
         _currentEffectCleanupList = previousEffectCleanupList;
     }
 }
+
 
 function registerRendererComponent(tagName, config) {
     if (!tagName || typeof tagName !== "string") {
