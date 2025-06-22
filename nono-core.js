@@ -5,30 +5,6 @@ const NueCoreConfig = {
     appVersion: null,
 };
 
-const rendererComponents = new Map();
-
-class RenderContext {
-    constructor(initialData = {}, parent = null) {
-        this.data = initialData;
-        this.parent = parent;
-    }
-    get(key) {
-        if (this.data.hasOwnProperty(key)) {
-            return this.data[key];
-        }
-        if (this.parent) {
-            return this.parent.get(key);
-        }
-        return undefined;
-    }
-    provide(newData) {
-        Object.assign(this.data, newData);
-    }
-    createChildContext() {
-        return new RenderContext({}, this);
-    }
-}
-
 const __NUE_CONFUSION_KEY__ = "NueJS-is-Awesome-And-Secret-!@#$%^";
 function nueSimpleTransform(text, key) {
     if (!text || !key) return text;
@@ -602,19 +578,7 @@ async function executeScript(scriptContent, initialProps = {}, emit = () => {}, 
     }
 }
 
-// nono-core.js
-
-/**
- * 【异步重构】编译 DOM 节点，处理指令、插值、子组件和插槽。
- * @param {Node} node - 需要编译的 DOM 节点。
- * @param {object} scope - 当前节点编译时所处的作用域对象。
- * @param {object} directiveHandlers - 指令处理器。
- * @param {RenderContext} context - 当前的渲染上下文。
- * @param {string} [parentComponentName="根组件"] - 父组件的名称。
- * @param {string|null} [currentContextOriginalUrl=null] - 当前编译上下文的原始 URL。
- * @returns {Promise<void>}
- */
-async function compileNode(node, scope, directiveHandlers, context, parentComponentName = "根组件", currentContextOriginalUrl = null) {
+async function compileNode(node, scope, directiveHandlers, parentComponentName = "根组件", currentContextOriginalUrl = null) {
     if (!directiveHandlers || typeof directiveHandlers.evaluateExpression !== "function") {
         console.error(`核心错误：[${parentComponentName}] 指令处理器或 evaluateExpression 未准备好，编译中止。`);
         return;
@@ -623,113 +587,57 @@ async function compileNode(node, scope, directiveHandlers, context, parentCompon
     if (node.nodeType === Node.ELEMENT_NODE) {
         const element = node;
         const tagName = element.tagName.toLowerCase();
-        const upperTagName = element.tagName.toUpperCase();
 
-        // --- 统一处理子组件（异构或 .nue） ---
+        // [MODIFIED] 简化组件判断逻辑
         const isNueComponent = tagName.includes("-") && !["template", "script", "style", "slot"].includes(tagName);
-        const rendererConfig = rendererComponents.get(upperTagName);
 
-        if (isNueComponent || rendererConfig) {
-            const componentName = rendererConfig ? upperTagName : tagName;
-            // 【优化点】对于异构组件，其 props schema 定义在 rendererConfig 中
-            const propSchema = rendererConfig ? rendererConfig.props : {};
-
-            // 【统一调用】parseAndProcessProps 返回一个干净的、包含响应式 getter 的 props 对象
-            const { props, events, attributesToRemove } = parseAndProcessProps(element, scope, propSchema, componentName);
+        if (isNueComponent) {
+            const componentName = tagName;
+            // [MODIFIED] 移除 propSchema，因为我们不再处理异构组件的 schema
+            const { props, events, attributesToRemove } = parseAndProcessProps(element, scope, {}, componentName);
 
             attributesToRemove.forEach((attrName) => element.removeAttribute(attrName));
 
-            if (isNueComponent) {
-                // .nue 组件的逻辑 (此部分保持不变)
-                const srcAttr = element.getAttribute("src");
-                const rawComponentPath = srcAttr ? srcAttr : `${tagName}.nue`;
-                if (srcAttr) element.removeAttribute("src");
-                const { versionedUrl: childVersionedUrl, originalUrl: childOriginalUrl } = getVersionedAndOriginalUrls(rawComponentPath, currentContextOriginalUrl);
+            const srcAttr = element.getAttribute("src");
+            const rawComponentPath = srcAttr ? srcAttr : `${tagName}.nue`;
+            if (srcAttr) element.removeAttribute("src");
+            const { versionedUrl: childVersionedUrl, originalUrl: childOriginalUrl } = getVersionedAndOriginalUrls(rawComponentPath, currentContextOriginalUrl);
 
-                const slotsDataForChild = {};
-                const slotContentContainer = document.createDocumentFragment();
-                Array.from(element.childNodes).forEach((cn) => slotContentContainer.appendChild(cn));
-                const rawSlotContents = { default: [] };
-                Array.from(slotContentContainer.childNodes).forEach((childNode) => {
-                    if (childNode.nodeType === Node.ELEMENT_NODE && childNode.tagName.toLowerCase() === "template") {
-                        if (childNode.hasAttribute("slot")) {
-                            let slotNameAttr = (childNode.getAttribute("slot") || "").trim() || "default";
-                            if (!rawSlotContents[slotNameAttr]) rawSlotContents[slotNameAttr] = [];
-                            const templateContent = childNode.content;
-                            if (templateContent) Array.from(templateContent.childNodes).forEach((c) => rawSlotContents[slotNameAttr].push(c.cloneNode(true)));
-                        } else {
-                            const templateContent = childNode.content;
-                            if (templateContent) Array.from(templateContent.childNodes).forEach((c) => rawSlotContents.default.push(c.cloneNode(true)));
-                        }
-                    } else if (!(childNode.nodeType === Node.TEXT_NODE && childNode.nodeValue.trim() === "")) {
-                        rawSlotContents.default.push(childNode.cloneNode(true));
+            const slotsDataForChild = {};
+            const slotContentContainer = document.createDocumentFragment();
+            Array.from(element.childNodes).forEach((cn) => slotContentContainer.appendChild(cn));
+            const rawSlotContents = { default: [] };
+            Array.from(slotContentContainer.childNodes).forEach((childNode) => {
+                if (childNode.nodeType === Node.ELEMENT_NODE && childNode.tagName.toLowerCase() === "template") {
+                    if (childNode.hasAttribute("slot")) {
+                        let slotNameAttr = (childNode.getAttribute("slot") || "").trim() || "default";
+                        if (!rawSlotContents[slotNameAttr]) rawSlotContents[slotNameAttr] = [];
+                        const templateContent = childNode.content;
+                        if (templateContent) Array.from(templateContent.childNodes).forEach((c) => rawSlotContents[slotNameAttr].push(c.cloneNode(true)));
+                    } else {
+                        const templateContent = childNode.content;
+                        if (templateContent) Array.from(templateContent.childNodes).forEach((c) => rawSlotContents.default.push(c.cloneNode(true)));
                     }
-                });
-                for (const sName in rawSlotContents) {
-                    if (rawSlotContents[sName].length > 0) {
-                        slotsDataForChild[sName] = { nodes: rawSlotContents[sName], parentScope: scope, parentContextOriginalUrl: currentContextOriginalUrl };
-                    }
+                } else if (!(childNode.nodeType === Node.TEXT_NODE && childNode.nodeValue.trim() === "")) {
+                    rawSlotContents.default.push(childNode.cloneNode(true));
                 }
-
-                const placeholder = document.createComment(`component-placeholder: ${tagName}`);
-                if (!element.parentNode) {
-                    console.error(`核心错误：[${parentComponentName}] 子组件 <${tagName}> 在替换为占位符前已无父节点。`);
-                    return;
+            });
+            for (const sName in rawSlotContents) {
+                if (rawSlotContents[sName].length > 0) {
+                    slotsDataForChild[sName] = { nodes: rawSlotContents[sName], parentScope: scope, parentContextOriginalUrl: currentContextOriginalUrl };
                 }
-                element.parentNode.replaceChild(placeholder, element);
-
-                await mountComponent(childVersionedUrl, placeholder, props, events, tagName, slotsDataForChild, childOriginalUrl);
-            } else {
-                // 异构组件的逻辑 (渲染器组件)
-                const refName = element.getAttribute("ref");
-                const nShowExpression = element.getAttribute("n-show");
-                if (refName) element.removeAttribute("ref");
-                if (nShowExpression) element.removeAttribute("n-show");
-
-                const childNodesToProcess = Array.from(element.childNodes);
-                const placeholder = document.createComment(`renderer-component: ${tagName}`);
-                placeholder.tagName = upperTagName;
-
-                if (element.parentNode) {
-                    element.parentNode.replaceChild(placeholder, element);
-                } else {
-                    console.warn(`核心警告：[${parentComponentName}] 渲染器组件 <${tagName}> 在替换为占位符时没有父节点。`);
-                }
-
-                const childContext = context.createChildContext();
-                childContext.provide({ "dom:parentElement": placeholder.parentNode });
-
-                // =================================================================
-                // 【核心修改点】
-                // 旧的调用: await rendererConfig.create({ static: {}, dynamic: props }, ...);
-                // 新的调用: 直接传递干净、扁平的 props 对象。
-                // 这使得适配器无需关心 prop 的来源（静态或动态），只需直接使用即可。
-                // 响应性由 props 对象内部的 getter 自动处理。
-                const instance = await rendererConfig.create(props, childContext, scope, events, placeholder);
-                // =================================================================
-
-                if (instance) {
-                    placeholder.__rendererInstance = instance;
-                    if (refName) scope.refs[refName] = instance;
-                    if (nShowExpression && typeof rendererConfig.setVisibility === "function") {
-                        createEffect(() => {
-                            let condition = true;
-                            try {
-                                condition = !!directiveHandlers.evaluateExpression(nShowExpression, scope, true);
-                            } catch (error) {}
-                            rendererConfig.setVisibility(instance, condition);
-                        });
-                    } else if (nShowExpression) {
-                        console.warn(`指令警告：[${parentComponentName}] 渲染器组件 <${tagName}> 使用了 n-show，但其配置未实现 setVisibility 方法。`);
-                    }
-                } else {
-                    console.error(`核心错误：[${parentComponentName}] 渲染器组件 <${tagName}> 的 create 方法没有返回实例。`);
-                }
-
-                // 异构组件的子节点继续在父组件的作用域下编译
-                const compilePromises = childNodesToProcess.map((child) => compileNode(child, scope, directiveHandlers, childContext, `${parentComponentName} > ${upperTagName}`, currentContextOriginalUrl));
-                await Promise.all(compilePromises);
             }
+
+            const placeholder = document.createComment(`component-placeholder: ${tagName}`);
+            if (!element.parentNode) {
+                console.error(`核心错误：[${parentComponentName}] 子组件 <${tagName}> 在替换为占位符前已无父节点。`);
+                return;
+            }
+            element.parentNode.replaceChild(placeholder, element);
+
+            await mountComponent(childVersionedUrl, placeholder, props, events, tagName, slotsDataForChild, childOriginalUrl);
+
+            // [MODIFIED] 直接返回，因为异构组件的逻辑分支已移除
             return;
         }
 
@@ -740,15 +648,17 @@ async function compileNode(node, scope, directiveHandlers, context, parentCompon
             element.removeAttribute("ref");
         }
 
-        // --- 指令处理 (此部分保持不变) ---
+        // --- 指令处理 ---
         const nIfAttr = element.getAttribute("n-if");
         if (nIfAttr !== null) {
-            directiveHandlers.handleNIf(element, nIfAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, context, cn, currentContextOriginalUrl), directiveHandlers, parentComponentName);
+            // [MODIFIED] 移除 context 参数
+            directiveHandlers.handleNIf(element, nIfAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl), directiveHandlers, parentComponentName);
             return;
         }
         const nForAttr = element.getAttribute("n-for");
         if (nForAttr !== null) {
-            directiveHandlers.handleNFor(element, nForAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, context, cn, currentContextOriginalUrl), directiveHandlers, parentComponentName);
+            // [MODIFIED] 移除 context 参数
+            directiveHandlers.handleNFor(element, nForAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl), directiveHandlers, parentComponentName);
             return;
         }
 
@@ -772,7 +682,8 @@ async function compileNode(node, scope, directiveHandlers, context, parentCompon
                 }
                 const contentFragmentForSlot = document.createDocumentFragment();
                 nodesToCompileInSlot.forEach((node) => contentFragmentForSlot.appendChild(node));
-                const compileSlotPromises = Array.from(contentFragmentForSlot.childNodes).map((node) => compileNode(node, slotScope, directiveHandlers, context, slotParentName, slotContextUrl));
+                // [MODIFIED] 移除 context 参数
+                const compileSlotPromises = Array.from(contentFragmentForSlot.childNodes).map((node) => compileNode(node, slotScope, directiveHandlers, slotParentName, slotContextUrl));
                 await Promise.all(compileSlotPromises);
                 parentOfSlotTag.insertBefore(contentFragmentForSlot, element);
                 parentOfSlotTag.removeChild(element);
@@ -825,9 +736,8 @@ async function compileNode(node, scope, directiveHandlers, context, parentCompon
         }
         attributesToRemoveAfterProcessing.forEach((attrName) => element.removeAttribute(attrName));
 
-        const childDomContext = context.createChildContext();
-        childDomContext.provide({ "dom:parentElement": element });
-        const compileChildPromises = Array.from(element.childNodes).map((child) => compileNode(child, scope, directiveHandlers, childDomContext, `${parentComponentName} > ${element.tagName.toUpperCase()}`, currentContextOriginalUrl));
+        // [MODIFIED] 移除 context 参数
+        const compileChildPromises = Array.from(element.childNodes).map((child) => compileNode(child, scope, directiveHandlers, `${parentComponentName} > ${element.tagName.toUpperCase()}`, currentContextOriginalUrl));
         await Promise.all(compileChildPromises);
     } else if (node.nodeType === Node.TEXT_NODE) {
         const textContent = node.textContent || "";
@@ -874,20 +784,9 @@ function injectStyles(css, originalComponentUrl) {
     styleElement.textContent = css;
     document.head.appendChild(styleElement);
 }
+
 function cleanupAndRemoveNode(node) {
     if (!node) return;
-    if (node.__rendererInstance) {
-        const upperTagName = node.tagName;
-        const rendererConfig = rendererComponents.get(upperTagName);
-        if (rendererConfig) {
-            try {
-                rendererConfig.destroy(node.__rendererInstance);
-            } catch (error) {
-                console.error(`核心错误：执行渲染器组件 <${upperTagName}> 的 destroy 方法时出错:`, error);
-            }
-        }
-        delete node.__rendererInstance;
-    }
     if (node.nodeType === Node.ELEMENT_NODE || node.nodeType === Node.COMMENT_NODE) {
         if (node.nodeType === Node.ELEMENT_NODE && node.hasChildNodes()) {
             Array.from(node.childNodes).forEach((child) => cleanupAndRemoveNode(child));
@@ -918,7 +817,6 @@ function cleanupAndRemoveNode(node) {
     }
 }
 
-// [REPLACE] 步骤 3.2: 用这个实现了模板克隆的版本替换旧的 mountComponent
 async function mountComponent(componentFile, targetSelectorOrElement, initialProps = {}, eventHandlers = {}, componentNameSuggestion, slotsDataFromParent = {}, baseResolutionUrlOverride) {
     const { versionedUrl: versionedComponentUrl, originalUrl: originalAbsoluteUrl } = getVersionedAndOriginalUrls(componentFile, baseResolutionUrlOverride || null);
     let componentName = componentNameSuggestion;
@@ -954,7 +852,6 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
         const componentText = await fetchAndCacheComponentText(versionedComponentUrl, originalAbsoluteUrl);
         let cacheEntry = componentCache.get(versionedComponentUrl);
         if (!cacheEntry) {
-            // 这一步在 fetchAndCacheComponentText 中已完成，作为安全保障
             cacheEntry = { text: componentText, structure: null, templateElement: null, originalUrl: originalAbsoluteUrl };
             componentCache.set(versionedComponentUrl, cacheEntry);
         }
@@ -970,26 +867,23 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
             componentScope.$slots = slotsDataFromParent;
         }
 
-        // [MODIFIED] 核心模板克隆逻辑
         let fragment;
         if (cacheEntry.templateElement) {
-            // 如果模板已编译，直接克隆，速度极快
             fragment = cacheEntry.templateElement.content.cloneNode(true);
         } else {
-            // 首次，解析并缓存
-            const templateEl = document.createElement('template');
+            const templateEl = document.createElement("template");
             templateEl.innerHTML = template.trim();
-            cacheEntry.templateElement = templateEl; // 缓存起来
+            cacheEntry.templateElement = templateEl;
             fragment = templateEl.content.cloneNode(true);
         }
-        // [MODIFIED] 不再需要 tempDiv 和 innerHTML
-        
+
         const topLevelNodesInFragment = Array.from(fragment.childNodes);
         mountedRootNode = topLevelNodesInFragment[0] || null;
-        const domParentForContext = isPlaceholder ? targetElement.parentNode : targetElement;
-        const rootContext = new RenderContext({ "dom:parentElement": domParentForContext });
-        const compilePromises = topLevelNodesInFragment.map((node) => compileNode(node, componentScope, window.NueDirectives, rootContext, componentName, originalAbsoluteUrl));
+
+        // [MODIFIED] 移除 rootContext 的创建和传递
+        const compilePromises = topLevelNodesInFragment.map((node) => compileNode(node, componentScope, window.NueDirectives, componentName, originalAbsoluteUrl));
         await Promise.all(compilePromises);
+
         injectStyles(style, originalAbsoluteUrl);
         if (isPlaceholder) {
             const parent = targetElement.parentNode;
@@ -1028,19 +922,6 @@ async function mountComponent(componentFile, targetSelectorOrElement, initialPro
     } finally {
         _currentEffectCleanupList = previousEffectCleanupList;
     }
-}
-
-
-function registerRendererComponent(tagName, config) {
-    if (!tagName || typeof tagName !== "string") {
-        console.error("核心错误：[registerRendererComponent] 必须提供一个有效的字符串 tagName。");
-        return;
-    }
-    if (!config || typeof config.create !== "function" || typeof config.destroy !== "function") {
-        console.error(`核心错误：[registerRendererComponent] 为 <${tagName}> 提供的配置对象无效。它必须至少包含 'create' 和 'destroy' 方法。`);
-        return;
-    }
-    rendererComponents.set(tagName.toUpperCase(), config);
 }
 
 window.NueCore = {
@@ -1102,5 +983,4 @@ window.NueCore = {
     navigateTo,
     compileNode,
     cleanupAndRemoveNode,
-    registerRendererComponent,
 };
