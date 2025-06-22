@@ -100,7 +100,7 @@ window.NueDirectives = {
         });
     },
 
-    // [REPLACE] 步骤 4.1: 用这个实现了智能协调算法的版本替换旧的 handleNFor
+    // [REPLACE] 最终优化版: 用这个更健壮、更简单的协调算法替换旧的 handleNFor
     handleNFor(element, expression, scope, compileFn, directiveHandlers, parentComponentName) {
         const forRegex = /^\s*\(([^,]+),\s*([^)]+)\)\s+in\s+(.+)$|^\s*([^,]+)\s+in\s+(.+)$/;
         const match = expression.match(forRegex);
@@ -119,7 +119,7 @@ window.NueDirectives = {
         element.parentNode.insertBefore(placeholder, element);
         element.parentNode.removeChild(element);
 
-        let oldNodesMap = new Map(); // key -> { node, scope, item }
+        let oldNodesMap = new Map(); // key -> { node, scope }
 
         createEffect(() => {
             const newList = this.evaluateExpression(listExpression, scope) || [];
@@ -127,10 +127,15 @@ window.NueDirectives = {
             if (!parent) return;
 
             const newNodesMap = new Map();
-            const newKeys = new Array(newList.length);
-            const oldKeys = Array.from(oldNodesMap.keys());
+            const newKeys = new Set();
 
-            // 1. 构建新 key 列表和 newNodesMap 的基础
+            // `lastNode` 是一个游标，始终指向前一个被正确放置的节点。
+            // 新节点或被移动的节点总是被插入到它的后面。
+            let lastNode = placeholder;
+
+            // =================================================================
+            // Pass 1: 遍历新列表，进行创建、更新和移动
+            // =================================================================
             for (let i = 0; i < newList.length; i++) {
                 const item = newList[i];
                 const childScope = Object.create(scope);
@@ -143,127 +148,72 @@ window.NueDirectives = {
                 if (key === null || key === undefined) {
                     console.warn(`指令警告：[${parentComponentName}] n-for 中的 key 为 null 或 undefined。这可能导致渲染行为异常。`);
                 }
+                newKeys.add(key);
 
-                newKeys[i] = key;
-                newNodesMap.set(key, { item, scope: childScope, node: null }); // node 稍后填充
-            }
+                const oldEntry = oldNodesMap.get(key);
 
-            // 2. 同步、移动和创建节点
-            let oldStartIdx = 0,
-                newStartIdx = 0;
-            let oldEndIdx = oldKeys.length - 1;
-            let newEndIdx = newKeys.length - 1;
-            let oldStartKey = oldKeys[oldStartIdx];
-            let newStartKey = newKeys[newStartIdx];
-            let oldEndKey = oldKeys[oldEndIdx];
-            let newEndKey = newKeys[newEndIdx];
+                if (oldEntry) {
+                    // --- 情况 A: 节点已存在，需要更新和移动 ---
+                    const { node, scope: oldScope } = oldEntry;
 
-            let nextNode = placeholder.nextSibling;
+                    // 1. 更新数据 (scope)
+                    oldScope[itemVarName] = item;
+                    oldScope[indexVarName] = i;
 
-            while (oldStartIdx <= oldEndIdx && newStartIdx <= newEndIdx) {
-                if (oldStartKey === undefined) {
-                    oldStartKey = oldKeys[++oldStartIdx];
-                } else if (oldEndKey === undefined) {
-                    oldEndKey = oldKeys[--oldEndIdx];
-                } else if (oldStartKey === newStartKey) {
-                    // 头对头匹配
-                    const { node, scope } = oldNodesMap.get(oldStartKey);
-                    scope[itemVarName] = newNodesMap.get(newStartKey).item;
-                    scope[indexVarName] = newStartIdx;
-                    newNodesMap.get(newStartKey).node = node;
-                    nextNode = node.nextSibling;
-                    oldStartKey = oldKeys[++oldStartIdx];
-                    newStartKey = newKeys[++newStartIdx];
-                } else if (oldEndKey === newEndKey) {
-                    // 尾对尾匹配
-                    const { node, scope } = oldNodesMap.get(oldEndKey);
-                    scope[itemVarName] = newNodesMap.get(newEndKey).item;
-                    scope[indexVarName] = newEndIdx;
-                    newNodesMap.get(newEndKey).node = node;
-                    oldEndKey = oldKeys[--oldEndIdx];
-                    newEndKey = newKeys[--newEndIdx];
-                } else if (oldStartKey === newEndKey) {
-                    // 头对尾匹配 (移动)
-                    const { node, scope } = oldNodesMap.get(oldStartKey);
-                    scope[itemVarName] = newNodesMap.get(newEndKey).item;
-                    scope[indexVarName] = newEndIdx;
-                    newNodesMap.get(newEndKey).node = node;
-                    parent.insertBefore(node, oldNodesMap.get(oldEndKey).node.nextSibling);
-                    oldStartKey = oldKeys[++oldStartIdx];
-                    newEndKey = newKeys[--newEndIdx];
-                } else if (oldEndKey === newStartKey) {
-                    // 尾对头匹配 (移动)
-                    const { node, scope } = oldNodesMap.get(oldEndKey);
-                    scope[itemVarName] = newNodesMap.get(newStartKey).item;
-                    scope[indexVarName] = newStartIdx;
-                    newNodesMap.get(newStartKey).node = node;
-                    parent.insertBefore(node, nextNode);
-                    nextNode = node;
-                    oldEndKey = oldKeys[--oldEndIdx];
-                    newStartKey = newKeys[++newStartIdx];
-                } else {
-                    // 查找新 key 在旧列表中的位置
-                    const idxInOld = oldKeys.indexOf(newStartKey);
-                    if (idxInOld === -1) {
-                        // 新增节点
-                        const { scope: childScope } = newNodesMap.get(newStartKey);
-                        const clone = element.cloneNode(true);
-                        clone.removeAttribute("n-for");
-                        if (element.hasAttribute(":key")) clone.removeAttribute(":key");
-
-                        parent.insertBefore(clone, nextNode);
-                        nextNode = clone;
-                        newNodesMap.get(newStartKey).node = clone;
-                        compileFn(clone, childScope, directiveHandlers, `${parentComponentName} (n-for item)`);
-                    } else {
-                        // 移动节点
-                        const keyToMove = oldKeys[idxInOld];
-                        const { node, scope } = oldNodesMap.get(keyToMove);
-                        scope[itemVarName] = newNodesMap.get(newStartKey).item;
-                        scope[indexVarName] = newStartIdx;
-                        newNodesMap.get(newStartKey).node = node;
-                        parent.insertBefore(node, nextNode);
-                        nextNode = node;
-                        oldKeys[idxInOld] = undefined; // 标记为已处理
+                    // 2. 移动到正确位置
+                    // 如果当前节点不是紧跟在前一个已放置节点的后面，说明它的位置错了，需要移动。
+                    if (node.previousSibling !== lastNode) {
+                        parent.insertBefore(node, lastNode.nextSibling);
                     }
-                    newStartKey = newKeys[++newStartIdx];
-                }
-            }
 
-            // 3. 处理剩余的节点
-            if (oldStartIdx > oldEndIdx) {
-                // 如果旧节点已处理完，新增所有剩余的新节点
-                const anchor = newEndIdx + 1 < newKeys.length ? newNodesMap.get(newKeys[newEndIdx + 1]).node : placeholder.nextSibling;
-                for (let i = newStartIdx; i <= newEndIdx; i++) {
-                    const key = newKeys[i];
-                    const { scope: childScope } = newNodesMap.get(key);
+                    // 3. 更新游标
+                    lastNode = node;
+                    newNodesMap.set(key, oldEntry);
+                } else {
+                    // --- 情况 B: 节点是全新的，需要创建 ---
                     const clone = element.cloneNode(true);
                     clone.removeAttribute("n-for");
-                    if (element.hasAttribute(":key")) clone.removeAttribute(":key");
+                    if (keyAttr) clone.removeAttribute(":key");
 
-                    parent.insertBefore(clone, anchor);
-                    newNodesMap.get(key).node = clone;
+                    // 1. 插入到正确位置
+                    parent.insertBefore(clone, lastNode.nextSibling);
+
+                    // 2. 更新游标
+                    lastNode = clone;
+
+                    // 3. 编译新节点并存入 newNodesMap
+                    const newEntry = { node: clone, scope: childScope };
+                    newNodesMap.set(key, newEntry);
                     compileFn(clone, childScope, directiveHandlers, `${parentComponentName} (n-for item)`);
-                }
-            } else if (newStartIdx > newEndIdx) {
-                // 如果新节点已处理完，删除所有剩余的旧节点
-                for (let i = oldStartIdx; i <= oldEndIdx; i++) {
-                    const key = oldKeys[i];
-                    if (key !== undefined) {
-                        cleanupAndRemoveNode(oldNodesMap.get(key).node);
-                    }
                 }
             }
 
-            // 4. 更新 oldNodesMap 以备下次 diff
+            // =================================================================
+            // Pass 2: 移除不再需要的旧节点
+            // =================================================================
+            for (const [key, { node }] of oldNodesMap.entries()) {
+                if (!newKeys.has(key)) {
+                    cleanupAndRemoveNode(node);
+                }
+            }
+
+            // 为下一次更新做准备
             oldNodesMap = newNodesMap;
         });
     },
 
     handleAttributeBinding(element, attrName, expression, scope, parentComponentName) {
+        // 将 kebab-case 的 attrName 转换为 camelCase 的 propName
+        const propName = attrName.replace(/-(\w)/g, (_, letter) => letter.toUpperCase());
+
         createEffect(() => {
             const value = this.evaluateExpression(expression, scope);
+
+            // 准确判断是否为 Web Component
+            const isWebComponent = element.tagName.includes("-") && window.customElements.get(element.tagName.toLowerCase());
+
             if (attrName === "class") {
+                // class 的处理逻辑保持不变
                 if (typeof value === "object" && value !== null) {
                     Object.keys(value).forEach((className) => {
                         element.classList.toggle(className, !!value[className]);
@@ -272,16 +222,28 @@ window.NueDirectives = {
                     element.setAttribute("class", value);
                 }
             } else if (attrName === "style") {
+                // style 的处理逻辑保持不变
                 if (typeof value === "object" && value !== null) {
                     Object.assign(element.style, value);
                 } else if (typeof value === "string") {
                     element.style.cssText = value;
                 }
+            } else if (isWebComponent && propName in element) {
+                // **策略核心：如果目标是 Web Component 且存在对应的 JS Property，则直接设置 Property**
+                // 这可以传递任何类型的数据（对象、数组、布尔值），无需序列化，性能最高。
+                try {
+                    element[propName] = value;
+                } catch (e) {
+                    console.error(`核心错误：为 Web Component <${element.tagName.toLowerCase()}> 设置属性 "${propName}" 时出错。`, e);
+                }
             } else {
+                // **回退策略：对于普通 HTML 元素，或 Web Component 上不存在对应 Property 的情况**
                 if (value === false || value === null || value === undefined) {
                     element.removeAttribute(attrName);
                 } else {
-                    element.setAttribute(attrName, value === true ? "" : String(value));
+                    // 这里的序列化逻辑现在只作为一种兼容性回退，而不是首选
+                    const finalValue = typeof value === "object" ? JSON.stringify(value) : value === true ? "" : String(value);
+                    element.setAttribute(attrName, finalValue);
                 }
             }
         });

@@ -578,6 +578,7 @@ async function executeScript(scriptContent, initialProps = {}, emit = () => {}, 
     }
 }
 
+// [REPLACE] 最终修复版: 修正了指令处理优先级的 compileNode
 async function compileNode(node, scope, directiveHandlers, parentComponentName = "根组件", currentContextOriginalUrl = null) {
     if (!directiveHandlers || typeof directiveHandlers.evaluateExpression !== "function") {
         console.error(`核心错误：[${parentComponentName}] 指令处理器或 evaluateExpression 未准备好，编译中止。`);
@@ -588,14 +589,33 @@ async function compileNode(node, scope, directiveHandlers, parentComponentName =
         const element = node;
         const tagName = element.tagName.toLowerCase();
 
-        // [MODIFIED] 简化组件判断逻辑
-        const isNueComponent = tagName.includes("-") && !["template", "script", "style", "slot"].includes(tagName);
+        // =================================================================
+        // 步骤 1: 结构性指令优先处理 (最高优先级)
+        // =================================================================
+        const nIfAttr = element.getAttribute("n-if");
+        if (nIfAttr !== null) {
+            directiveHandlers.handleNIf(element, nIfAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl), directiveHandlers, parentComponentName);
+            return;
+        }
+        const nForAttr = element.getAttribute("n-for");
+        if (nForAttr !== null) {
+            // 这里的 compileFn 就是 compileNode 自身，它会处理克隆出的每个元素
+            directiveHandlers.handleNFor(element, nForAttr, scope, compileNode, directiveHandlers, parentComponentName);
+            return;
+        }
+
+        // =================================================================
+        // 步骤 2: 区分组件类型
+        // =================================================================
+        const isNueComponent = tagName.includes("-") && !window.customElements.get(tagName);
+        const isWebComponent = tagName.includes("-") && window.customElements.get(tagName);
 
         if (isNueComponent) {
+            // -------------------------------------------------
+            // 2.1 处理 Nue 组件
+            // -------------------------------------------------
             const componentName = tagName;
-            // [MODIFIED] 移除 propSchema，因为我们不再处理异构组件的 schema
             const { props, events, attributesToRemove } = parseAndProcessProps(element, scope, {}, componentName);
-
             attributesToRemove.forEach((attrName) => element.removeAttribute(attrName));
 
             const srcAttr = element.getAttribute("src");
@@ -636,63 +656,12 @@ async function compileNode(node, scope, directiveHandlers, parentComponentName =
             element.parentNode.replaceChild(placeholder, element);
 
             await mountComponent(childVersionedUrl, placeholder, props, events, tagName, slotsDataForChild, childOriginalUrl);
-
-            // [MODIFIED] 直接返回，因为异构组件的逻辑分支已移除
             return;
         }
 
-        // --- 为普通 DOM 元素处理 ref ---
-        const refName = element.getAttribute("ref");
-        if (refName) {
-            scope.refs[refName] = element;
-            element.removeAttribute("ref");
-        }
-
-        // --- 指令处理 ---
-        const nIfAttr = element.getAttribute("n-if");
-        if (nIfAttr !== null) {
-            // [MODIFIED] 移除 context 参数
-            directiveHandlers.handleNIf(element, nIfAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl), directiveHandlers, parentComponentName);
-            return;
-        }
-        const nForAttr = element.getAttribute("n-for");
-        if (nForAttr !== null) {
-            // [MODIFIED] 移除 context 参数
-            directiveHandlers.handleNFor(element, nForAttr, scope, (node, s, dh, cn) => compileNode(node, s, dh, cn, currentContextOriginalUrl), directiveHandlers, parentComponentName);
-            return;
-        }
-
-        if (tagName === "slot") {
-            const slotName = element.getAttribute("name") || "default";
-            const slotDataFromParent = scope.$slots && scope.$slots[slotName];
-            const parentOfSlotTag = element.parentNode;
-            if (parentOfSlotTag) {
-                let nodesToCompileInSlot = [];
-                let slotScope = scope;
-                let slotContextUrl = currentContextOriginalUrl;
-                let slotParentName = `${parentComponentName} (slot '${slotName}' fallback)`;
-                if (slotDataFromParent && slotDataFromParent.nodes && slotDataFromParent.nodes.length > 0) {
-                    const { nodes, parentScope, parentContextOriginalUrl } = slotDataFromParent;
-                    nodesToCompileInSlot = nodes.map((n) => n.cloneNode(true));
-                    slotScope = parentScope;
-                    slotContextUrl = parentContextOriginalUrl;
-                    slotParentName = `${parentComponentName} (slot '${slotName}' content from parent)`;
-                } else {
-                    nodesToCompileInSlot = Array.from(element.childNodes);
-                }
-                const contentFragmentForSlot = document.createDocumentFragment();
-                nodesToCompileInSlot.forEach((node) => contentFragmentForSlot.appendChild(node));
-                // [MODIFIED] 移除 context 参数
-                const compileSlotPromises = Array.from(contentFragmentForSlot.childNodes).map((node) => compileNode(node, slotScope, directiveHandlers, slotParentName, slotContextUrl));
-                await Promise.all(compileSlotPromises);
-                parentOfSlotTag.insertBefore(contentFragmentForSlot, element);
-                parentOfSlotTag.removeChild(element);
-            } else {
-                console.warn(`核心警告：[${parentComponentName}] <slot name="${slotName}"> 标签无父节点，无法渲染。`);
-            }
-            return;
-        }
-
+        // =================================================================
+        // 步骤 3: 处理属性、事件和其他指令
+        // =================================================================
         const attributesToRemoveAfterProcessing = [];
         for (const attr of Array.from(element.attributes)) {
             const attrName = attr.name;
@@ -736,10 +705,57 @@ async function compileNode(node, scope, directiveHandlers, parentComponentName =
         }
         attributesToRemoveAfterProcessing.forEach((attrName) => element.removeAttribute(attrName));
 
-        // [MODIFIED] 移除 context 参数
+        if (isWebComponent) {
+            // -------------------------------------------------
+            // 3.1 如果是 Web Component，处理完属性后就“放行”
+            // -------------------------------------------------
+            return;
+        }
+
+        // =================================================================
+        // 步骤 4: 处理普通元素的剩余逻辑 (ref, slot, 子节点)
+        // =================================================================
+        const refName = element.getAttribute("ref");
+        if (refName) {
+            scope.refs[refName] = element;
+            element.removeAttribute("ref");
+        }
+
+        if (tagName === "slot") {
+            const slotName = element.getAttribute("name") || "default";
+            const slotDataFromParent = scope.$slots && scope.$slots[slotName];
+            const parentOfSlotTag = element.parentNode;
+            if (parentOfSlotTag) {
+                let nodesToCompileInSlot = [];
+                let slotScope = scope;
+                let slotContextUrl = currentContextOriginalUrl;
+                let slotParentName = `${parentComponentName} (slot '${slotName}' fallback)`;
+                if (slotDataFromParent && slotDataFromParent.nodes && slotDataFromParent.nodes.length > 0) {
+                    const { nodes, parentScope, parentContextOriginalUrl } = slotDataFromParent;
+                    nodesToCompileInSlot = nodes.map((n) => n.cloneNode(true));
+                    slotScope = parentScope;
+                    slotContextUrl = parentContextOriginalUrl;
+                    slotParentName = `${parentComponentName} (slot '${slotName}' content from parent)`;
+                } else {
+                    nodesToCompileInSlot = Array.from(element.childNodes);
+                }
+                const contentFragmentForSlot = document.createDocumentFragment();
+                nodesToCompileInSlot.forEach((node) => contentFragmentForSlot.appendChild(node));
+                const compileSlotPromises = Array.from(contentFragmentForSlot.childNodes).map((node) => compileNode(node, slotScope, directiveHandlers, slotParentName, slotContextUrl));
+                await Promise.all(compileSlotPromises);
+                parentOfSlotTag.insertBefore(contentFragmentForSlot, element);
+                parentOfSlotTag.removeChild(element);
+            } else {
+                console.warn(`核心警告：[${parentComponentName}] <slot name="${slotName}"> 标签无父节点，无法渲染。`);
+            }
+            return;
+        }
+
+        // 编译普通元素的子节点
         const compileChildPromises = Array.from(element.childNodes).map((child) => compileNode(child, scope, directiveHandlers, `${parentComponentName} > ${element.tagName.toUpperCase()}`, currentContextOriginalUrl));
         await Promise.all(compileChildPromises);
     } else if (node.nodeType === Node.TEXT_NODE) {
+        // 文本节点的处理逻辑保持不变
         const textContent = node.textContent || "";
         const mustacheRegex = /\{\{([^}]+)\}\}/g;
         if (!mustacheRegex.test(textContent)) return;
